@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from observacao import lote_conforme_rn07
+from src.modules.observacao import lote_conforme_rn07
 
 
 def test_lote_reprovado_sem_observacao_deve_falhar():

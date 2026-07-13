@@ -1,10 +1,10 @@
-# src/issue_03.py
+# src/modules/issue_03.py
 # Issue #3 — Implementar RN04–RN05: status e normalização OK/NOK
 # PDD: docs/pdd/ · seção 12 — Regras de negócio
 #
 # Módulo individual desta issue. A Main do projeto (main.py / bot.py) deve
 # importar as funções abaixo, ex:
-#   from src.issue_03 import normalizar_status, validar_status
+#   from src.modules.issue_03 import normalizar_status, validar_status
 
 STATUS_VALIDOS = {"APROVADO", "REPROVADO", "PENDENTE"}
 
