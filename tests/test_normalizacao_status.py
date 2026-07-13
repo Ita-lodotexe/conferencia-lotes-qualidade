@@ -2,7 +2,7 @@
 # Testes referentes à Issue #3 — RN04 e RN05
 
 import pytest
-from src.issue_03 import normalizar_status, validar_status
+from src.modules.normalizacao_status import normalizar_status, validar_status
 
 
 class TestNormalizarStatusRN05:
