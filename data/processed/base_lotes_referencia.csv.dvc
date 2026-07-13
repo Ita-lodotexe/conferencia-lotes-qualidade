@@ -1,0 +1,5 @@
+outs:
+- md5: 9483c19de5515b58d51be4be9c732b47
+  size: 1372
+  hash: md5
+  path: base_lotes_referencia.csv

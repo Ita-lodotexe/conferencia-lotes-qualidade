@@ -1,0 +1,5 @@
+outs:
+- md5: 60ed9fb14bb4ba2e6f1334a693df4dfb
+  size: 14041
+  hash: md5
+  path: inspecao_lotes_dia.xlsx
