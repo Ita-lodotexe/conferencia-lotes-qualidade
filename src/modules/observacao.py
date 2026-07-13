@@ -1,4 +1,4 @@
-"""Validação da RN07 - observação obrigatória em lote reprovado."""
+# Validação da RN07 - observação obrigatória em lote reprovado.
 
 STATUS_REPROVADO = {"reprovado", "nok"}
 

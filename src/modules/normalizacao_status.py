@@ -1,10 +1,9 @@
-# src/modules/issue_03.py
 # Issue #3 — Implementar RN04–RN05: status e normalização OK/NOK
 # PDD: docs/pdd/ · seção 12 — Regras de negócio
-#
-# Módulo individual desta issue. A Main do projeto (main.py / bot.py) deve
-# importar as funções abaixo, ex:
-#   from src.modules.issue_03 import normalizar_status, validar_status
+# 
+# from src.modules.normalizacao_status import normalizar_status, validar_status
+
+import logging
 
 STATUS_VALIDOS = {"APROVADO", "REPROVADO", "PENDENTE"}
 
@@ -36,14 +35,23 @@ def normalizar_status(status):
         não aqui).
     """
     if status is None:
+        logging.debug("RN05: Status recebido é None. Retornando None.")
         return None
 
     status_limpo = str(status).strip().upper()
 
     if status_limpo == "":
+        logging.debug("RN05: Status resultou em string vazia após limpeza. Retornando None.")
         return None
 
-    return MAPA_NORMALIZACAO.get(status_limpo, status_limpo)
+    status_normalizado = MAPA_NORMALIZACAO.get(status_limpo, status_limpo)
+    
+    if status_normalizado != status_limpo:
+        logging.info(f"RN05: Status normalizado de '{status_limpo}' para '{status_normalizado}'.")
+    else:
+        logging.debug(f"RN05: Status '{status_limpo}' não sofreu alterações no mapeamento.")
+
+    return status_normalizado
 
 
 def validar_status(status):
@@ -73,6 +81,14 @@ def validar_status(status):
     """
     status_normalizado = normalizar_status(status)
     valido = status_normalizado in STATUS_VALIDOS
+
+    if valido:
+        logging.info(f"RN04: Status '{status_normalizado}' (original: '{status}') validado com sucesso.")
+    else:
+        logging.warning(
+            f"RN04: Status '{status_normalizado}' (original: '{status}') não reconhecido. "
+            "Classificado como ambíguo e encaminhado para RN06."
+        )
 
     return {
         "status_original": status,
