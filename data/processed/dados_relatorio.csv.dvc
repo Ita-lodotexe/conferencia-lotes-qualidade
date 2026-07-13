@@ -1,0 +1,5 @@
+outs:
+- md5: f80a129f4faaa68438d424c8fd3fe590
+  size: 1848
+  hash: md5
+  path: dados_relatorio.csv
