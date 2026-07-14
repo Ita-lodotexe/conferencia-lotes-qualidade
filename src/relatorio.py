@@ -10,7 +10,7 @@ file_handler = logging.FileHandler('logs/relatorio.log', encoding="utf-8", mode=
 logging.basicConfig(
     handlers=[console_handler, file_handler],
     level=logging.INFO,
-    datefmt='%Y-%m-%d %H:%M:%S',
+    datefmt='%d-%m-%Y %H:%M:%S',
     format='%(asctime)s  | %(levelname)s | %(funcName)s | %(message)s',
 )
 
@@ -22,9 +22,9 @@ from modules.validacao import valida_estrutura, valida_campos_obrigatorios
 from modules.verificacao_lotes import verificar_status_lote
 
 # Funções para validar RN04 e RN05
-from modules.normalizacao_status import normalizar_status, validar_status
+from modules.normalizacao_status import validar_status
 
-# Função para validar RN06
+# Função para validar RN07
 from modules.observacao import lote_conforme_rn07
 
 
@@ -41,44 +41,58 @@ def gerar_relatorio(relatorio: pd.DataFrame):
         logging.info(f"CAMPOS FALTANDO:\n{campos_faltantes}")
         return
     
-    campos_obrigatorios_vazios = valida_campos_obrigatorios(relatorio)
+    rn02 = valida_campos_obrigatorios(relatorio)
 
-    if len(campos_obrigatorios_vazios) > 0:
-        logging.info(f"Existem campos vazios nas seguintes linhas:\n{campos_obrigatorios_vazios}")
+    if len(rn02) > 0:
+        logging.info(f"Existem campos vazios nas seguintes linhas:\n{rn02}")
     else:
         logging.info(f"Sem campos vazios nesse relatório")
     logging.info("=======================================================================") 
     logging.info("                    Fim da validação de RN01 e RN02.")
     logging.info("=======================================================================") 
 
-
-    # Início da validação de lotes: RN03
-    logging.info("=======================================================================") 
-    logging.info("                          Validando RN03 ...") 
-    logging.info("=======================================================================") 
-    lotes_incorretos = []
-    lotes_relatorio = relatorio['lote_id'].dropna()
-    for lote in lotes_relatorio:
-        if verificar_status_lote(lote):
-            pass
-        else:
-            lotes_incorretos.append(lote)
-    logging.info("=======================================================================") 
-    logging.info("                      Fim da validação de RN03.")
-    logging.info("=======================================================================") 
+    # Transformando em dicionario para tratamento em cada regra
+    linhas_rn02 = [linha_com_falha['linha'] - 1 for linha_com_falha in rn02]
+    print(linhas_rn02)
+    print(f'PRE-DROP:{relatorio}')
+    relatorio = relatorio.drop(linhas_rn02)
+    print(f'POS-DROP:{relatorio}')
+    dicionario_relatorio = relatorio.to_dict('records')
 
 
-    # Início da validação de lotes: RN04 e RN05
-    logging.info("=======================================================================")
-    logging.info("                        Validando RN04 e RN05 ...") 
-    logging.info("=======================================================================")
-    status_relatorio = relatorio['status']
-    for status in status_relatorio:
-        validar_status(status)
-    logging.info("=======================================================================") 
-    logging.info("                   Fim da validação das RN04 e RN05.")
-    logging.info("=======================================================================") 
+    rn03 = []
+    rn06 = []
+    rn07 = []
+    for index, lote in enumerate(dicionario_relatorio):
+        logging.info("=======================================================================") 
+        logging.info(f"                Validando regras para {lote['lote_id']}") 
+        logging.info("=======================================================================") 
 
+        # Início da validação de lotes: RN03
+        if not verificar_status_lote(lote['lote_id']):
+            rn03.append(lote)
+
+        # Início da validação de lotes: RN04 e RN05
+        status_validados = validar_status(lote['status'])
+        print(status_validados)
+        if not status_validados['valido']:
+            rn06.append(lote)
+
+        # Início da validação de observação: RN07
+        info_lote = {'lote_id':lote['lote_id'], 'status':lote['status'], 'observacao':lote['observacao']}
+        logging.info(f'INFO DO LOTE:{info_lote}')
+        logging.info(f'CONFORMIDADE RN07: {lote_conforme_rn07(info_lote)}')
+        if not lote_conforme_rn07(info_lote):
+            rn07.append(lote)
+        logging.info("=======================================================================") 
+        logging.info(f"                Fim da validação para {lote['lote_id']}")
+        logging.info("=======================================================================") 
+        logging.info(f'LOTES VALIDADOS: {index+1}')
+
+    logging.warning(f'FALHANDO NA RN02:\n{rn02}')
+    logging.warning(f'FALHANDO NA RN03:\n{rn03}')
+    logging.warning(f'FALHANDO NA RN06:\n{rn06}')
+    logging.warning(f'FALHANDO NA RN07:\n{rn07}')
 if __name__ == '__main__':
     df = pd.read_csv('data/processed/dados_relatorio.csv')    
     gerar_relatorio(df)
