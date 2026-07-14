@@ -2,3 +2,7 @@ pytest
 pandas
 openpyxl
 dvc
+fastapi
+uvicorn
+python-multipart
+httpx

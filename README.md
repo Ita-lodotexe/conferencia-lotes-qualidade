@@ -1,5 +1,31 @@
 # conferencia-lotes-qualidade
 
+## Interface web
+
+O bot pode ser operado por uma página única no navegador: upload do
+relatório original, resumo das divergências direto na tela e download do
+relatório de divergências em `.xlsx`. É um módulo independente, em
+[webapp/](webapp/) — instruções de execução completas em
+[webapp/README.md](webapp/README.md).
+
+## Relatório de divergências (Issue #5)
+
+`gerar_relatorio()`, em [src/relatorio.py](src/relatorio.py), aplica as
+regras RN01–RN07 sobre a planilha de lotes e monta o `.xlsx` de
+divergências (abas `Resumo` e `Divergencias`). É a função consumida pela
+interface web acima.
+
+```python
+import pandas as pd
+from src.relatorio import gerar_relatorio
+
+df = pd.read_csv("data/processed/dados_relatorio.csv")
+resultado = gerar_relatorio(df, "relatorio_divergencias.xlsx")
+print(resultado["resumo"])
+```
+
+Testes em [tests/test_relatorio.py](tests/test_relatorio.py).
+
 ## RN07 - Observação obrigatória em lote reprovado
 
 Um lote com status `REPROVADO` (ou `NOK`) obrigatoriamente precisa ter o
