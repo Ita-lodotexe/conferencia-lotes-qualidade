@@ -24,13 +24,15 @@ def lote_conforme_rn07(info_lote: dict) -> bool:
     status = "" if pd.isna(status_bruto) else str(status_bruto).strip().lower()
     observacao = "" if pd.isna(obs_bruta) else str(obs_bruta).strip().lower()
     
+    lote_id = info_lote.get("lote_id", "Desconhecido")
     if status not in STATUS_REPROVADO:
+        logging.info(f"Lote {lote_id} APROVADO, está conforme a RN07.")
         return True
     
     conforme = bool(observacao)
-    
     if not conforme:
-        lote_id = info_lote.get("lote_id", "Desconhecido")
         logging.warning(f"RN07 Violarada: Lote {lote_id} está REPROVADO mas sem observação.")
+    else:
+        logging.info(f"Lote {lote_id} REPROVADO, mas está conforme a RN07.")
         
     return conforme
