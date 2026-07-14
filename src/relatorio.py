@@ -4,6 +4,7 @@
 
 import pandas as pd
 import logging
+from datetime import datetime
 
 console_handler = logging.StreamHandler()
 file_handler = logging.FileHandler('logs/relatorio.log', encoding="utf-8", mode='w')
@@ -28,7 +29,7 @@ from modules.normalizacao_status import validar_status
 from modules.observacao import lote_conforme_rn07
 
 
-def gerar_relatorio(relatorio: pd.DataFrame):
+def encontrar_divergencias(relatorio: pd.DataFrame):
     logging.info("Iniciando geração do relatório ...")
 
     # Início da validação de estrutura: RN01 e RN02
@@ -52,13 +53,7 @@ def gerar_relatorio(relatorio: pd.DataFrame):
     logging.info("=======================================================================") 
 
     # Transformando em dicionario para tratamento em cada regra
-    linhas_rn02 = [linha_com_falha['linha'] - 1 for linha_com_falha in rn02]
-    print(linhas_rn02)
-    print(f'PRE-DROP:{relatorio}')
-    relatorio = relatorio.drop(linhas_rn02)
-    print(f'POS-DROP:{relatorio}')
     dicionario_relatorio = relatorio.to_dict('records')
-
 
     rn03 = []
     rn06 = []
@@ -81,7 +76,6 @@ def gerar_relatorio(relatorio: pd.DataFrame):
         # Início da validação de observação: RN07
         info_lote = {'lote_id':lote['lote_id'], 'status':lote['status'], 'observacao':lote['observacao']}
         logging.info(f'INFO DO LOTE:{info_lote}')
-        logging.info(f'CONFORMIDADE RN07: {lote_conforme_rn07(info_lote)}')
         if not lote_conforme_rn07(info_lote):
             rn07.append(lote)
         logging.info("=======================================================================") 
@@ -93,6 +87,76 @@ def gerar_relatorio(relatorio: pd.DataFrame):
     logging.warning(f'FALHANDO NA RN03:\n{rn03}')
     logging.warning(f'FALHANDO NA RN06:\n{rn06}')
     logging.warning(f'FALHANDO NA RN07:\n{rn07}')
+
+    # Chama a função de consolidação
+    gerar_relatorio_excel(
+        df_original=relatorio, 
+        rn02=rn02, 
+        rn03=rn03, 
+        rn06=rn06, 
+        rn07=rn07, 
+        caminho_saida=f"data/processed/{datetime.now().strftime('%d-%m-%Y')}-relatorio_divergencias.xlsx"
+    )
+
+
+def gerar_relatorio_excel(df_original: pd.DataFrame, rn02: list, rn03: list, rn06: list, rn07: list, caminho_saida: str):
+    """
+    Consolida as divergências e gera um Excel apenas com os lotes problemáticos.
+    """
+    logging.info("Iniciando a consolidação do relatório Excel...")
+    
+    df_relatorio = df_original.copy()
+    df_relatorio['Motivo_Divergencia'] = ""
+    
+    # Consolidação da RN02 (Campos vazios)
+    for erro in rn02:
+        idx_pandas = erro.get('linha')
+        campo = erro.get('campo')
+        
+        if idx_pandas in df_relatorio.index:
+            df_relatorio.loc[idx_pandas, 'Motivo_Divergencia'] += f"RN02 (Campo '{campo}' vazio); "
+
+    # Consolidação das demais RNs (Usando lote_id)
+    ids_rn03 = [lote.get('lote_id') for lote in rn03 if pd.notna(lote.get('lote_id'))]
+    ids_rn06 = [lote.get('lote_id') for lote in rn06 if pd.notna(lote.get('lote_id'))]
+    ids_rn07 = [lote.get('lote_id') for lote in rn07 if pd.notna(lote.get('lote_id'))]
+
+    if ids_rn03:
+        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn03), 'Motivo_Divergencia'] += "RN03 (Lote inexistente); "
+    
+    if ids_rn06:
+        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn06), 'Motivo_Divergencia'] += "RN06 (Status ambíguo); "
+        
+    if ids_rn07:
+        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn07), 'Motivo_Divergencia'] += "RN07 (Reprovado sem observação); "
+
+    # Limpeza final
+    df_relatorio['Motivo_Divergencia'] = df_relatorio['Motivo_Divergencia'].str.strip("; ")
+
+    # Filtro de Ocorrências
+    df_final = df_relatorio[df_relatorio['Motivo_Divergencia'] != ""]
+
+    # Exportação
+    if not df_final.empty:
+        try:
+            colunas = ['lote_id', 'Motivo_Divergencia'] + [col for col in df_final.columns if col not in ['lote_id', 'Motivo_Divergencia']]
+            df_final = df_final[colunas]
+            
+            df_final.to_excel(caminho_saida, index=False)
+            logging.info(f"Relatório exportado com sucesso para '{caminho_saida}'. ({len(df_final)} divergências encontradas).")
+        except Exception as e:
+            logging.error(f"Erro ao salvar arquivo Excel: {e}")
+    else:
+        logging.info("Nenhuma divergência real encontrada. Excel não gerado.")
+
+    return df_final
+
+
+
+
+
+
+
 if __name__ == '__main__':
     df = pd.read_csv('data/processed/dados_relatorio.csv')    
-    gerar_relatorio(df)
+    encontrar_divergencias(df)
