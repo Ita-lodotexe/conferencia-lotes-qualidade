@@ -53,7 +53,7 @@ def valida_campos_obrigatorios(df: pd.DataFrame) -> list[dict]:
             if campo not in df.columns:
                 continue
             if _esta_vazio(linha[campo]):
-                ocorrencias.append({"linha": indice + 2, "campo": campo})
+                ocorrencias.append({"linha": indice + 1, "campo": campo})
     return ocorrencias
 
 
