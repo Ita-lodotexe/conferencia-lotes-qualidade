@@ -16,6 +16,7 @@ import importlib
 import sys
 import pandas as pd
 import pytest
+import logging
 
 from src.modules import verificacao_lotes as modulo
 
@@ -45,16 +46,15 @@ def base_padrao(monkeypatch):
 # RN03 — Existência do lote
 # ---------------------------------------------------------------------
 
-def test_lote_existente_retorna_true(base_padrao, capsys):
+def test_lote_existente_retorna_true(base_padrao, caplog):
+    caplog.set_level(logging.INFO)
     assert modulo.verificar_existencia_lote("LOTE001") is True
-    saida = capsys.readouterr().out
-    assert "encontrado" in saida.lower()
+    assert "encontrado" in caplog.text.lower()
 
 
-def test_lote_inexistente_retorna_false(base_padrao, capsys):
+def test_lote_inexistente_retorna_false(base_padrao, caplog):
     assert modulo.verificar_existencia_lote("LOTE999") is False
-    saida = capsys.readouterr().out
-    assert "não encontrado" in saida.lower()
+    assert "não encontrado" in caplog.text.lower()
 
 
 def test_existencia_e_case_sensitive(base_padrao):
