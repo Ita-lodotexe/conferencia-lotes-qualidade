@@ -42,3 +42,75 @@ python3 -m pytest tests/ -v
 `tests/test_validacao_lotes.py` cobre 100% do módulo, incluindo falha de leitura do CSV e casos de borda (lote duplicado, entrada `None`, coluna ausente).
 
 > ⚠️ Duplicidade de `lote_id` na base de referência quebra `verificar_status_lote` (`.item()` exige valor único). A RN03 garante existência, não unicidade — vale revisar se isso é aceitável para os dados de origem.
+
+# Módulo de geração de relatório
+
+## O que esse módulo faz
+
+O módulo [src/relatorio.py](src/relatorio.py) é responsável por gerar o relatório de divergências a partir dos dados de entrada, aplicando as regras de negócio definidas nos demais módulos do projeto.
+
+Ele atua como orquestrador do processo de validação, chamando funções específicas para verificar:
+
+- a estrutura do relatório e a presença de campos obrigatórios;
+- a existência e o status dos lotes;
+- a normalização e a consistência do campo de status;
+- a obrigatoriedade de observação para lotes reprovados.
+
+## Funções principais
+
+### encontrar_divergencias(relatorio)
+
+Essa função recebe um DataFrame com os dados do relatório e executa o fluxo completo de validação.
+
+O fluxo é o seguinte:
+
+1. Valida a estrutura do relatório com as funções de [src/modules/validacao.py](src/modules/validacao.py).
+2. Verifica campos obrigatórios e identifica linhas com valores vazios.
+3. Para cada lote, chama as validações de:
+   - [src/modules/verificacao_lotes.py](src/modules/verificacao_lotes.py) para a RN03;
+   - [src/modules/normalizacao_status.py](src/modules/normalizacao_status.py) para as regras de status;
+   - [src/modules/observacao.py](src/modules/observacao.py) para a RN07.
+4. Consolida as divergências encontradas e gera um arquivo Excel com os lotes problemáticos.
+
+### gerar_relatorio_excel(df_original, rn02, rn03, rn06, rn07, caminho_saida)
+
+Essa função organiza as divergências recebidas e exporta um relatório em formato Excel contendo apenas os registros que apresentaram alguma inconsistência.
+
+O resultado inclui uma coluna chamada `Motivo_Divergencia`, com os motivos associados a cada lote.
+
+## Regras que o módulo consulta
+
+O módulo utiliza as seguintes validações:
+
+- RN01 e RN02: estrutura do relatório e campos obrigatórios;
+- RN03: existência do lote na base de referência;
+- RN04 e RN05: validação e normalização do status;
+- RN07: observação obrigatória para lote reprovado.
+
+## Como executar
+
+A partir da raiz do projeto, o módulo pode ser executado diretamente com:
+
+```bash
+python src/relatorio.py
+```
+
+Isso lê o arquivo CSV em `data/processed/dados_relatorio.csv` e gera um relatório Excel em `data/processed/`.
+
+## Exemplo de uso
+
+```python
+import pandas as pd
+from src.relatorio import encontrar_divergencias
+
+relatorio = pd.read_csv('data/processed/dados_relatorio.csv')
+encontrar_divergencias(relatorio)
+```
+
+## Saída gerada
+
+O módulo produz:
+
+- logs detalhados em `logs/relatorio.log`;
+- um arquivo Excel com os lotes divergentes em `data/processed/`;
+- uma consolidação dos motivos de divergência para cada linha do relatório.
