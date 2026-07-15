@@ -1,14 +1,6 @@
-"""
-Módulo de validação do Bot de Conferência de Lotes.
-
-Implementa as regras de negócio de estrutura e preenchimento definidas no
-PDD v0.2 (seção 12):
-
-    RN01: a planilha de lotes deve conter as 8 colunas esperadas.
-    RN02: os 7 campos obrigatórios não podem estar vazios em nenhuma linha.
-
-Convênio 005/2025 (INOVA, IFAM, LG Electronics do Brasil).
-"""
+# Implementa as regras de negócio de estrutura e preenchimento: 
+#   RN01: a planilha de lotes deve conter as 8 colunas esperadas.
+#   RN02: os 7 campos obrigatórios não podem estar vazios em nenhuma linha.
 
 from __future__ import annotations
 
@@ -52,8 +44,7 @@ def valida_campos_obrigatorios(df: pd.DataFrame) -> list[dict]:
     """Valida os campos obrigatórios de cada linha (RN02).
 
     Percorre cada linha e verifica se algum campo obrigatório está vazio
-    (None, NaN ou texto em branco). O número da linha usa a numeração da
-    planilha (começa em 2, já que a linha 1 é o cabeçalho).
+    (None, NaN ou texto em branco).
     """
     ocorrencias: list[dict] = []
     for indice, linha in df.iterrows():
@@ -61,7 +52,7 @@ def valida_campos_obrigatorios(df: pd.DataFrame) -> list[dict]:
             if campo not in df.columns:
                 continue
             if _esta_vazio(linha[campo]):
-                ocorrencias.append({"linha": indice + 2, "campo": campo})
+                ocorrencias.append({"linha": indice, "campo": campo})
     return ocorrencias
 
 
