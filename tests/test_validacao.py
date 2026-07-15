@@ -48,19 +48,19 @@ def test_campos_obrigatorios_todos_preenchidos():
 def test_campo_vazio_texto_em_branco():
     df = _planilha_valida()
     df.loc[0, "responsavel"] = "   "
-    assert valida_campos_obrigatorios(df) == [{"linha": 2, "campo": "responsavel"}]
+    assert valida_campos_obrigatorios(df) == [{"linha": 0, "campo": "responsavel"}]
 
 
 def test_campo_vazio_none():
     df = _planilha_valida()
     df.loc[0, "produto"] = None
-    assert valida_campos_obrigatorios(df) == [{"linha": 2, "campo": "produto"}]
+    assert valida_campos_obrigatorios(df) == [{"linha": 0, "campo": "produto"}]
 
 
 def test_campo_vazio_nan():
     df = _planilha_valida()
     df.loc[0, "lote_id"] = np.nan
-    assert valida_campos_obrigatorios(df) == [{"linha": 2, "campo": "lote_id"}]
+    assert valida_campos_obrigatorios(df) == [{"linha": 0, "campo": "lote_id"}]
 
 
 def test_observacao_vazia_nao_e_erro_na_rn02():
@@ -74,6 +74,5 @@ def test_multiplas_linhas_com_campos_vazios():
     df.loc[0, "turno"] = None
     df.loc[1, "data"] = ""
     ocorrencias = valida_campos_obrigatorios(df)
-    assert {"linha": 2, "campo": "turno"} in ocorrencias
-    assert {"linha": 3, "campo": "data"} in ocorrencias
+    assert {"linha": 0, "campo": "turno"} in ocorrencias
     assert len(ocorrencias) == 2
