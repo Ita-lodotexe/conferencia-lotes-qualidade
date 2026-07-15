@@ -1,162 +1,170 @@
-# Arquivo de geração de relatório, testando a implementação de todas as linhas do
-# relatório aplicando as funções dos módulos para validar as regras
-# de negócio - RN01 ao RN07.
+"""
+Módulo de geração do relatório de divergências (Issue #5).
+
+Aplica as regras de negócio RN01-RN07, já implementadas em
+``src/modules/``, sobre a planilha de lotes recebida e monta um relatório
+de divergências em .xlsx com duas abas: "Resumo" e "Divergencias".
+
+Convênio 005/2025 (INOVA, IFAM, LG Electronics do Brasil).
+"""
+
+from __future__ import annotations
 
 import pandas as pd
-import logging
-from datetime import datetime
 
-console_handler = logging.StreamHandler()
-file_handler = logging.FileHandler('logs/relatorio.log', encoding="utf-8", mode='w')
-logging.basicConfig(
-    handlers=[console_handler, file_handler],
-    level=logging.INFO,
-    datefmt='%d-%m-%Y %H:%M:%S',
-    format='%(asctime)s  | %(levelname)s | %(funcName)s | %(message)s',
-)
+from src.modules.validacao import valida_campos_obrigatorios, valida_estrutura
+from src.modules.verificacao_lotes import verificar_status_lote
+from src.modules.normalizacao_status import validar_status
+from src.modules.observacao import lote_conforme_rn07
 
-
-# Funções para validar RN01 e RN02
-from modules.validacao import valida_estrutura, valida_campos_obrigatorios
-
-# Função para validar RN03
-from modules.verificacao_lotes import verificar_status_lote
-
-# Funções para validar RN04 e RN05
-from modules.normalizacao_status import validar_status
-
-# Função para validar RN07
-from modules.observacao import lote_conforme_rn07
+REGRAS_DESCRICAO = {
+    "RN01": "Estrutura da planilha",
+    "RN02": "Campo obrigatório vazio",
+    "RN03": "Existência/status do lote",
+    "RN06": "Status ambíguo",
+    "RN07": "Observação em lote reprovado",
+}
 
 
-def encontrar_divergencias(relatorio: pd.DataFrame):
-    logging.info("Iniciando geração do relatório ...")
+def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
+    """Gera o relatório de divergências de uma planilha de lotes.
 
-    # Início da validação de estrutura: RN01 e RN02
-    logging.info("=======================================================================") 
-    logging.info("                       Validando RN01 e RN02 ...")
-    logging.info("=======================================================================") 
+    Args:
+        relatorio: planilha de lotes já carregada em um DataFrame.
+        caminho_saida: caminho onde o .xlsx de divergências será escrito.
+
+    Returns:
+        dict com "resumo" (métricas agregadas), "divergencias" (lista de
+        ocorrências) e "arquivo" (caminho_saida, para conveniência).
+    """
     campos_faltantes = valida_estrutura(relatorio)
-    if len(campos_faltantes) > 0:
-        logging.info("Existem campos faltantes ou não formatados no relatório, encerrando sistema.")
-        logging.info(f"CAMPOS FALTANDO:\n{campos_faltantes}")
-        return
-    
-    rn02 = valida_campos_obrigatorios(relatorio)
 
-    if len(rn02) > 0:
-        logging.info(f"Existem campos vazios nas seguintes linhas:\n{rn02}")
-    else:
-        logging.info(f"Sem campos vazios nesse relatório")
-    logging.info("=======================================================================") 
-    logging.info("                    Fim da validação de RN01 e RN02.")
-    logging.info("=======================================================================") 
+    if campos_faltantes:
+        divergencias = [
+            {
+                "linha": None,
+                "lote_id": None,
+                "regra": "RN01",
+                "descricao": f"Colunas ausentes na planilha: {', '.join(campos_faltantes)}.",
+            }
+        ]
+        resumo = _monta_resumo(relatorio, divergencias, estrutura_valida=False)
+        _exporta_divergencias(divergencias, resumo, caminho_saida)
+        return {"resumo": resumo, "divergencias": divergencias, "arquivo": caminho_saida}
 
-    # Transformando em dicionario para tratamento em cada regra
-    dicionario_relatorio = relatorio.to_dict('records')
+    divergencias = []
 
-    rn03 = []
-    rn06 = []
-    rn07 = []
-    for index, lote in enumerate(dicionario_relatorio):
-        logging.info("=======================================================================") 
-        logging.info(f"                Validando regras para {lote['lote_id']}") 
-        logging.info("=======================================================================") 
+    for ocorrencia in valida_campos_obrigatorios(relatorio):
+        linha = ocorrencia["linha"]
+        lote_id = relatorio.loc[linha - 2, "lote_id"]
+        divergencias.append(
+            {
+                "linha": linha,
+                "lote_id": lote_id,
+                "regra": "RN02",
+                "descricao": f"Campo obrigatório '{ocorrencia['campo']}' vazio.",
+            }
+        )
 
-        # Início da validação de lotes: RN03
-        if not verificar_status_lote(lote['lote_id']):
-            rn03.append(lote)
+    for indice, linha in relatorio.iterrows():
+        numero_linha = indice + 2
+        lote_id = linha.get("lote_id")
 
-        # Início da validação de lotes: RN04 e RN05
-        status_validados = validar_status(lote['status'])
-        print(status_validados)
-        if not status_validados['valido']:
-            rn06.append(lote)
+        status_lote = verificar_status_lote(lote_id) if pd.notna(lote_id) else None
+        if status_lote is None:
+            divergencias.append(
+                {
+                    "linha": numero_linha,
+                    "lote_id": lote_id,
+                    "regra": "RN03",
+                    "descricao": f"Lote '{lote_id}' não encontrado na base de referência.",
+                }
+            )
+        elif status_lote is False:
+            divergencias.append(
+                {
+                    "linha": numero_linha,
+                    "lote_id": lote_id,
+                    "regra": "RN03",
+                    "descricao": f"Lote '{lote_id}' está inativo na base de referência.",
+                }
+            )
 
-        # Início da validação de observação: RN07
-        info_lote = {'lote_id':lote['lote_id'], 'status':lote['status'], 'observacao':lote['observacao']}
-        logging.info(f'INFO DO LOTE:{info_lote}')
-        if not lote_conforme_rn07(info_lote):
-            rn07.append(lote)
-        logging.info("=======================================================================") 
-        logging.info(f"                Fim da validação para {lote['lote_id']}")
-        logging.info("=======================================================================") 
-        logging.info(f'LOTES VALIDADOS: {index+1}')
+        resultado_status = validar_status(linha.get("status"))
+        if resultado_status["ambiguo"]:
+            divergencias.append(
+                {
+                    "linha": numero_linha,
+                    "lote_id": lote_id,
+                    "regra": "RN06",
+                    "descricao": f"Status '{resultado_status['status_original']}' é ambíguo e requer revisão manual.",
+                }
+            )
 
-    logging.warning(f'FALHANDO NA RN02:\n{rn02}')
-    logging.warning(f'FALHANDO NA RN03:\n{rn03}')
-    logging.warning(f'FALHANDO NA RN06:\n{rn06}')
-    logging.warning(f'FALHANDO NA RN07:\n{rn07}')
+        observacao = linha.get("observacao")
+        lote_normalizado = {
+            "status": resultado_status["status_normalizado"],
+            "observacao": None if pd.isna(observacao) else observacao,
+        }
+        if not lote_conforme_rn07(lote_normalizado):
+            divergencias.append(
+                {
+                    "linha": numero_linha,
+                    "lote_id": lote_id,
+                    "regra": "RN07",
+                    "descricao": "Lote reprovado sem observação preenchida.",
+                }
+            )
 
-    # Chama a função de consolidação
-    gerar_relatorio_excel(
-        df_original=relatorio, 
-        rn02=rn02, 
-        rn03=rn03, 
-        rn06=rn06, 
-        rn07=rn07, 
-        caminho_saida=f"data/processed/{datetime.now().strftime('%d-%m-%Y')}-relatorio_divergencias.xlsx"
-    )
-
-
-def gerar_relatorio_excel(df_original: pd.DataFrame, rn02: list, rn03: list, rn06: list, rn07: list, caminho_saida: str):
-    """
-    Consolida as divergências e gera um Excel apenas com os lotes problemáticos.
-    """
-    logging.info("Iniciando a consolidação do relatório Excel...")
-    
-    df_relatorio = df_original.copy()
-    df_relatorio['Motivo_Divergencia'] = ""
-    
-    # Consolidação da RN02 (Campos vazios)
-    for erro in rn02:
-        idx_pandas = erro.get('linha')
-        campo = erro.get('campo')
-        
-        if idx_pandas in df_relatorio.index:
-            df_relatorio.loc[idx_pandas, 'Motivo_Divergencia'] += f"RN02 (Campo '{campo}' vazio); "
-
-    # Consolidação das demais RNs (Usando lote_id)
-    ids_rn03 = [lote.get('lote_id') for lote in rn03 if pd.notna(lote.get('lote_id'))]
-    ids_rn06 = [lote.get('lote_id') for lote in rn06 if pd.notna(lote.get('lote_id'))]
-    ids_rn07 = [lote.get('lote_id') for lote in rn07 if pd.notna(lote.get('lote_id'))]
-
-    if ids_rn03:
-        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn03), 'Motivo_Divergencia'] += "RN03 (Lote inexistente); "
-    
-    if ids_rn06:
-        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn06), 'Motivo_Divergencia'] += "RN06 (Status ambíguo); "
-        
-    if ids_rn07:
-        df_relatorio.loc[df_relatorio['lote_id'].isin(ids_rn07), 'Motivo_Divergencia'] += "RN07 (Reprovado sem observação); "
-
-    # Limpeza final
-    df_relatorio['Motivo_Divergencia'] = df_relatorio['Motivo_Divergencia'].str.strip("; ")
-
-    # Filtro de Ocorrências
-    df_final = df_relatorio[df_relatorio['Motivo_Divergencia'] != ""]
-
-    # Exportação
-    if not df_final.empty:
-        try:
-            colunas = ['lote_id', 'Motivo_Divergencia'] + [col for col in df_final.columns if col not in ['lote_id', 'Motivo_Divergencia']]
-            df_final = df_final[colunas]
-            
-            df_final.to_excel(caminho_saida, index=False)
-            logging.info(f"Relatório exportado com sucesso para '{caminho_saida}'. ({len(df_final)} divergências encontradas).")
-        except Exception as e:
-            logging.error(f"Erro ao salvar arquivo Excel: {e}")
-    else:
-        logging.info("Nenhuma divergência real encontrada. Excel não gerado.")
-
-    return df_final
+    resumo = _monta_resumo(relatorio, divergencias, estrutura_valida=True)
+    _exporta_divergencias(divergencias, resumo, caminho_saida)
+    return {"resumo": resumo, "divergencias": divergencias, "arquivo": caminho_saida}
 
 
+def _monta_resumo(relatorio: pd.DataFrame, divergencias: list[dict], estrutura_valida: bool) -> dict:
+    total_lotes = len(relatorio)
+    lotes_com_divergencia = len({d["lote_id"] for d in divergencias if d["lote_id"] is not None})
+
+    divergencias_por_regra = {regra: 0 for regra in REGRAS_DESCRICAO}
+    for divergencia in divergencias:
+        divergencias_por_regra[divergencia["regra"]] += 1
+
+    return {
+        "estrutura_valida": estrutura_valida,
+        "total_lotes": total_lotes,
+        "lotes_com_divergencia": lotes_com_divergencia,
+        "lotes_conformes": max(total_lotes - lotes_com_divergencia, 0) if estrutura_valida else 0,
+        "total_divergencias": len(divergencias),
+        "divergencias_por_regra": divergencias_por_regra,
+    }
 
 
+def _exporta_divergencias(divergencias: list[dict], resumo: dict, caminho_saida: str) -> None:
+    colunas_divergencias = ["regra", "lote_id", "linha", "descricao"]
+    df_divergencias = pd.DataFrame(divergencias, columns=colunas_divergencias)
+
+    linhas_resumo = [
+        {"metrica": "Estrutura válida", "valor": "Sim" if resumo["estrutura_valida"] else "Não"},
+        {"metrica": "Total de lotes", "valor": resumo["total_lotes"]},
+        {"metrica": "Lotes conformes", "valor": resumo["lotes_conformes"]},
+        {"metrica": "Lotes com divergência", "valor": resumo["lotes_com_divergencia"]},
+        {"metrica": "Total de divergências", "valor": resumo["total_divergencias"]},
+    ]
+    for regra, descricao in REGRAS_DESCRICAO.items():
+        linhas_resumo.append(
+            {
+                "metrica": f"Divergências {regra} ({descricao})",
+                "valor": resumo["divergencias_por_regra"][regra],
+            }
+        )
+    df_resumo = pd.DataFrame(linhas_resumo)
+
+    with pd.ExcelWriter(caminho_saida, engine="openpyxl") as writer:
+        df_resumo.to_excel(writer, sheet_name="Resumo", index=False)
+        df_divergencias.to_excel(writer, sheet_name="Divergencias", index=False)
 
 
-
-if __name__ == '__main__':
-    df = pd.read_csv('data/processed/dados_relatorio.csv')    
-    encontrar_divergencias(df)
+if __name__ == "__main__":
+    df = pd.read_csv("data/processed/dados_relatorio.csv")
+    resultado = gerar_relatorio(df, "data/relatorio_divergencias.xlsx")
+    print(resultado["resumo"])

@@ -1,0 +1,238 @@
+/*
+  Paleta inspirada na identidade visual pública da LG Electronics
+  (vermelho de marca #A50034, branco, cinzas neutros). Não reproduz o
+  design system interno oficial da LG — ver aviso no README.
+*/
+:root {
+  --lg-red: #a50034;
+  --lg-red-dark: #78002e;
+  --lg-red-soft: #fdecf1;
+  --ink: #1d1d1d;
+  --ink-muted: #6e6e6e;
+  --bg: #f5f5f5;
+  --surface: #ffffff;
+  --border: #e2e2e2;
+  --ok: #1e7f3f;
+  --font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.topbar {
+  background: var(--lg-red);
+  color: #fff;
+}
+
+.topbar__inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand-mark {
+  font-weight: 700;
+  font-size: 1.4rem;
+  letter-spacing: 0.05em;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.topbar__titles h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.topbar__titles p {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+.container {
+  max-width: 960px;
+  margin: 32px auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.card h3 {
+  font-size: 1rem;
+  margin-bottom: 8px;
+}
+
+.muted {
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+code {
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 32px;
+  margin: 16px 0;
+  cursor: pointer;
+  text-align: center;
+  color: var(--ink-muted);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.dropzone--active {
+  border-color: var(--lg-red);
+  color: var(--lg-red);
+  background: var(--lg-red-soft);
+}
+
+.btn {
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 12px 24px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.btn--primary {
+  background: var(--lg-red);
+  color: #fff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--lg-red-dark);
+}
+
+.btn--primary:disabled {
+  background: var(--border);
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.btn--secondary {
+  background: var(--surface);
+  color: var(--lg-red);
+  border: 2px solid var(--lg-red);
+}
+
+.btn--secondary:hover {
+  background: var(--lg-red-soft);
+}
+
+.mensagem-erro {
+  color: var(--lg-red-dark);
+  background: var(--lg-red-soft);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 0.9rem;
+}
+
+.mensagem-carregando {
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.metricas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+
+.metrica {
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.metrica strong {
+  display: block;
+  font-size: 1.6rem;
+  color: var(--lg-red);
+}
+
+.metrica.metrica--ok strong {
+  color: var(--ok);
+}
+
+.metrica span {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.tabela-wrapper {
+  overflow-x: auto;
+  margin-bottom: 24px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--ink-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.footer {
+  text-align: center;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  padding: 24px;
+}

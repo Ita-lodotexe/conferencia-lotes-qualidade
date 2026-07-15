@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bot de Conferência de Lotes — Relatório de Divergências</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <span class="brand-mark">LG</span>
+      <div class="topbar__titles">
+        <h1>Bot de Conferência de Lotes</h1>
+        <p>Relatório de divergências de qualidade</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card upload-card" id="upload-section">
+      <h2>1. Envie o relatório original</h2>
+      <p class="muted">
+        Formatos aceitos: <strong>.xlsx</strong> ou <strong>.csv</strong>, com as colunas
+        <code>lote_id, produto, linha, turno, status, responsavel, data, observacao</code>.
+      </p>
+
+      <form id="upload-form">
+        <label class="dropzone" id="dropzone" for="arquivo">
+          <input type="file" id="arquivo" name="arquivo" accept=".xlsx,.xls,.csv" hidden />
+          <span id="dropzone-texto">Clique para escolher o arquivo ou arraste aqui</span>
+        </label>
+        <button type="submit" class="btn btn--primary" id="btn-enviar" disabled>
+          Enviar relatório
+        </button>
+      </form>
+
+      <p id="mensagem-erro" class="mensagem-erro" hidden></p>
+      <p id="mensagem-carregando" class="mensagem-carregando" hidden>Processando relatório…</p>
+    </section>
+
+    <section class="card resultado-card" id="resultado-section" hidden>
+      <h2>2. Resumo do relatório</h2>
+
+      <div class="metricas" id="metricas"></div>
+
+      <h3>Divergências encontradas</h3>
+      <div class="tabela-wrapper">
+        <table id="tabela-divergencias">
+          <thead>
+            <tr>
+              <th>Regra</th>
+              <th>Lote</th>
+              <th>Linha</th>
+              <th>Descrição</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="sem-divergencias" class="muted" hidden>
+          Nenhuma divergência encontrada — todos os lotes estão conformes.
+        </p>
+      </div>
+
+      <button type="button" class="btn btn--secondary" id="btn-download">
+        Baixar relatório de divergências (.xlsx)
+      </button>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Convênio 005/2025 — INOVA · IFAM · LG Electronics do Brasil</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
