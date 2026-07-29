@@ -5,4 +5,5 @@ dvc
 fastapi
 uvicorn
 python-multipart
-httpx
+httpxselenium
+webdriver-manager
