@@ -56,7 +56,7 @@ def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
 
     for ocorrencia in valida_campos_obrigatorios(relatorio):
         linha = ocorrencia["linha"]
-        lote_id = relatorio.loc[linha - 2, "lote_id"]
+        lote_id = relatorio.loc[linha, "lote_id"]
         divergencias.append(
             {
                 "linha": linha,
