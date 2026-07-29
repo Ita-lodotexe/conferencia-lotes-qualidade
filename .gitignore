@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Automacao web (Playwright/Selenium)
+automation_fixtures/
+evidencias/
+logs/
