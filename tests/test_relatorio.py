@@ -3,26 +3,21 @@
 import pandas as pd
 import pytest
 
-from src.modules import verificacao_lotes as modulo_verificacao
+import src.relatorio as relatorio_modulo
 from src.relatorio import gerar_relatorio
 
 
 @pytest.fixture(autouse=True)
-def restaurar_base_lotes():
-    original = modulo_verificacao.BASE_LOTES.copy()
-    yield
-    modulo_verificacao.BASE_LOTES = original
-
-
-@pytest.fixture
 def base_referencia(monkeypatch):
+    """Substitui o carregamento da base de referência por um DataFrame
+    controlado, sem depender do CSV real em disco."""
     df = pd.DataFrame(
         {
             "lote_id": ["LOTE001", "LOTE002", "LOTE003", "LOTE004"],
             "status_cadastro": ["Ativo", "Inativo", "Ativo", "Ativo"],
         }
     )
-    monkeypatch.setattr(modulo_verificacao, "BASE_LOTES", df)
+    monkeypatch.setattr(relatorio_modulo, "carregar_base_referencia", lambda caminho: df)
     return df
 
 
@@ -136,6 +131,19 @@ def test_observacao_vazia_via_csv_gera_divergencia_rn07(base_referencia, tmp_pat
 
     regras = [d["regra"] for d in resultado["divergencias"]]
     assert "RN07" in regras
+
+
+def test_base_referencia_ausente_gera_divergencia_infra_sem_estourar(monkeypatch, tmp_path):
+    def _levanta_erro(caminho):
+        raise FileNotFoundError(f"[Errno 2] {caminho}")
+
+    monkeypatch.setattr(relatorio_modulo, "carregar_base_referencia", _levanta_erro)
+
+    df = pd.DataFrame([_linha(lote_id="LOTE001")])
+    resultado = gerar_relatorio(df, str(tmp_path / "relatorio.xlsx"))
+
+    assert resultado["divergencias"][0]["regra"] == "INFRA"
+    assert resultado["resumo"]["estrutura_valida"] is False
 
 
 def test_arquivo_xlsx_gerado_tem_abas_resumo_e_divergencias(base_referencia, tmp_path):
