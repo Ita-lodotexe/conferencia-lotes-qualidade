@@ -1,5 +1,32 @@
 # conferencia-lotes-qualidade
 
+## Camada BotCity (v0.2.0)
+
+Fundação de execução do bot como robô BotCity: configuração via `.env`,
+logging em arquivo e validação fail-fast de pré-requisitos, em `src/bot/`.
+
+**Configuração:**
+
+```bash
+cp .env.example .env
+# preencha BOTCITY_WORKSPACE, BOTCITY_LOGIN e BOTCITY_KEY com os valores
+# do painel do BotCity Maestro (https://developers.botcity.dev/app/)
+```
+
+**Rodando o bot localmente:**
+
+```bash
+python -m src.bot.main
+```
+
+Os logs de execução são gravados em `logs/execucao.log` (e também exibidos
+no terminal).
+
+> **Nota:** esta versão entrega só a fundação (config, logs, validação
+> fail-fast da pasta de entrada). A integração real com o Maestro, o
+> DataPool e o Vault de credenciais do BotCity fica para as issues #17,
+> #19 e #21.
+
 ## Interface web
 
 O bot pode ser operado por uma página única no navegador: upload do

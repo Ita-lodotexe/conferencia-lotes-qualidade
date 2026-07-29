@@ -13,11 +13,14 @@ from __future__ import annotations
 import pandas as pd
 
 from src.modules.validacao import valida_campos_obrigatorios, valida_estrutura
-from src.modules.verificacao_lotes import verificar_status_lote
+from src.modules.verificacao_lotes import carregar_base_referencia, verificar_status_lote
 from src.modules.normalizacao_status import validar_status
 from src.modules.observacao import lote_conforme_rn07
 
+CAMINHO_BASE_REFERENCIA = "data/processed/base_lotes_referencia.csv"
+
 REGRAS_DESCRICAO = {
+    "INFRA": "Erro de infraestrutura",
     "RN01": "Estrutura da planilha",
     "RN02": "Campo obrigatório vazio",
     "RN03": "Existência/status do lote",
@@ -37,6 +40,21 @@ def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
         dict com "resumo" (métricas agregadas), "divergencias" (lista de
         ocorrências) e "arquivo" (caminho_saida, para conveniência).
     """
+    try:
+        base_referencia = carregar_base_referencia(CAMINHO_BASE_REFERENCIA)
+    except Exception as erro:
+        divergencias = [
+            {
+                "linha": None,
+                "lote_id": None,
+                "regra": "INFRA",
+                "descricao": f"Não foi possível carregar a base de referência de lotes: {erro}",
+            }
+        ]
+        resumo = _monta_resumo(relatorio, divergencias, estrutura_valida=False)
+        _exporta_divergencias(divergencias, resumo, caminho_saida)
+        return {"resumo": resumo, "divergencias": divergencias, "arquivo": caminho_saida}
+
     campos_faltantes = valida_estrutura(relatorio)
 
     if campos_faltantes:
@@ -70,7 +88,7 @@ def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
         numero_linha = indice + 2
         lote_id = linha.get("lote_id")
 
-        status_lote = verificar_status_lote(lote_id) if pd.notna(lote_id) else None
+        status_lote = verificar_status_lote(base_referencia, lote_id) if pd.notna(lote_id) else None
         if status_lote is None:
             divergencias.append(
                 {
