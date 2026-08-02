@@ -9,8 +9,9 @@ logging em arquivo e validação fail-fast de pré-requisitos, em `src/bot/`.
 
 ```bash
 cp .env.example .env
-# preencha BOTCITY_WORKSPACE, BOTCITY_LOGIN e BOTCITY_KEY com os valores
-# do painel do BotCity Maestro (https://developers.botcity.dev/app/)
+# preencha BOTCITY_WORKSPACE, BOTCITY_SERVER, BOTCITY_LOGIN e BOTCITY_KEY
+# com os valores do painel do BotCity Maestro
+# (https://developers.botcity.dev/app/ → Ambiente do desenvolvedor)
 ```
 
 **Rodando o bot localmente:**
@@ -22,10 +23,33 @@ python -m src.bot.main
 Os logs de execução são gravados em `logs/execucao.log` (e também exibidos
 no terminal).
 
-> **Nota:** esta versão entrega só a fundação (config, logs, validação
-> fail-fast da pasta de entrada). A integração real com o Maestro, o
-> DataPool e o Vault de credenciais do BotCity fica para as issues #17,
-> #19 e #21.
+> **Nota:** esta versão entrega a fundação (config, logs, validação
+> fail-fast da pasta de entrada) e o cofre de credenciais (seção abaixo).
+> A integração real com a fila/DataPool do Maestro fica para a issue #19.
+
+## Cofre de credenciais
+
+`src/bot/vault_client.py` expõe `obter_credencial_erp() -> (usuario, senha)`,
+usada para autenticar no ERP sem nenhuma senha hardcoded no código.
+
+A flag `VAULT_ENABLED` (no `.env`) alterna o comportamento:
+
+- **`VAULT_ENABLED=false`** (padrão, modo local/desenvolvimento): retorna
+  uma credencial fictícia (`"bot_local"` / `"senha_dev"`) sem tocar no SDK
+  do BotCity — não precisa nem de rede nem de credenciais reais para
+  desenvolver.
+- **`VAULT_ENABLED=true`**: faz login no BotCity Maestro
+  (`BOTCITY_SERVER` + `BOTCITY_LOGIN` + `BOTCITY_KEY`, configurados no
+  `.env`, nunca commitados) e busca a credencial real
+  `credencial_erp_eqp04` (chaves `usuario`/`senha`) no Credentials Vault
+  do workspace.
+
+**A senha nunca é logada em nenhum modo**, incluindo o caminho de erro: se
+o Vault ou o SDK falharem, o `vault_client` loga só o *tipo* da exceção
+(nunca `str(exception)`, que poderia ecoar conteúdo sensível do servidor)
+e relança uma `VaultError` genérica — quem chama a função nunca vê a
+exceção original do SDK, só uma mensagem apontando para checar
+`BOTCITY_SERVER`/`BOTCITY_LOGIN`/`BOTCITY_KEY`.
 
 ## Interface web
 

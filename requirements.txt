@@ -7,3 +7,4 @@ uvicorn
 python-multipart
 httpx
 python-dotenv
+botcity-maestro-sdk==0.9.0
