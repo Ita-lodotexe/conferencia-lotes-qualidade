@@ -39,10 +39,9 @@ except ImportError:
 DATAPOOL_LABEL = "FilaAuditoriaLotes-Eqp04"
 ARQUIVO_CSV = "lotes_auditoria.csv"  # dentro de PASTA_ENTRADA, usado no dry-run
 
-# Caminho versionado pelo DVC; quando ausente (sem `dvc pull`), recorre-se
-# ao CSV mínimo de desenvolvimento commitado no repositório.
-BASE_REFERENCIA_PATH = "data/processed/base_lotes_referencia.csv"
-BASE_REFERENCIA_FALLBACK = "data/dev/base_lotes_referencia_dev.csv"
+# Caminho único da base de referência, gerado pelo preprocessor
+# (scripts/planilha_para_csv.py) a partir da planilha oficial.
+BASE_REFERENCIA = "data/processed/base_lotes_referencia.csv"
 
 REGRAS_CONTABILIZADAS = ["RN02", "RN03", "RN06", "RN07"]
 
@@ -67,18 +66,6 @@ def _contabilizar_divergencias(resumo: dict, divergencias: list[dict]) -> None:
         resumo["divergencias_por_regra"][regra] = (
             resumo["divergencias_por_regra"].get(regra, 0) + 1
         )
-
-
-def _caminho_base_referencia() -> str:
-    """Base do DVC quando disponível; senão, o CSV mínimo de desenvolvimento."""
-    if os.path.isfile(BASE_REFERENCIA_PATH):
-        return BASE_REFERENCIA_PATH
-
-    logging.warning(
-        f"Base do DVC ausente ({BASE_REFERENCIA_PATH}); usando base de "
-        f"desenvolvimento: {BASE_REFERENCIA_FALLBACK}"
-    )
-    return BASE_REFERENCIA_FALLBACK
 
 
 def _logar_resumo(resumo: dict) -> None:
@@ -318,8 +305,15 @@ def main() -> int:
 
     logger.info(f"Acessando sistema com o usuário: {usuario}")
 
+    if not os.path.isfile(BASE_REFERENCIA):
+        logger.error(
+            f"Base de referência não encontrada em {BASE_REFERENCIA}. "
+            f"Execute 'python -m scripts.planilha_para_csv' antes."
+        )
+        return 1
+
     try:
-        base_ref = carregar_base_referencia(_caminho_base_referencia())
+        base_ref = carregar_base_referencia(BASE_REFERENCIA)
     except Exception as e:
         logger.error(f"Falha ao carregar a base de referência (tipo: {type(e).__name__}).")
         return 1

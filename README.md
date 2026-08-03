@@ -1,9 +1,56 @@
 # conferencia-lotes-qualidade
 
-## Camada BotCity (v0.2.0)
+## Preparando o dado real (issue #26)
+
+A planilha oficial do exercício fica em
+`dados_referencia/inspecao_lotes_dia.xlsx`. Ela tem formato humano (3 abas,
+títulos, rodapé, legenda de cores, nota do revisor) e por isso não é
+consumida diretamente pelo bot: um preprocessor traduz o formato humano
+para os CSVs que o restante do fluxo já sabe ler.
+
+```bash
+python -m scripts.planilha_para_csv
+```
+
+Isso gera dois arquivos:
+
+| Saída | Origem | Conteúdo | Consumido por |
+|---|---|---|---|
+| `dados_entrada/lotes_auditoria.csv` | aba `Inspecao_14_06_2026` | 25 lotes | Dispatcher (fila) e Performer (dry-run) |
+| `data/processed/base_lotes_referencia.csv` | aba `Base_Referencia` | 23 lotes cadastrados | Performer (RN03) |
+
+O preprocessor corta as linhas de lixo (rodapé `Total de registros`,
+legenda de cores, nota do revisor) por limite de posição, e normaliza
+células vazias do Excel para string vazia — evitando que `NaN` do pandas
+chegue ao DataPool do Maestro, onde não é JSON válido.
+
+**Fluxo operacional completo:**
+
+```bash
+python -m scripts.planilha_para_csv   # 1. planilha oficial -> CSVs
+python -m scripts.dispatcher          # 2. CSV -> fila no Maestro
+python -m src.bot.performer           # 3. fila -> validação RN01-RN07
+```
+
+> ⚠️ **Divergência conhecida entre a planilha e o resultado do bot.** A
+> planilha marca visualmente 8 lotes como divergentes entre os 25; o bot
+> detecta 7. A diferença é a linha 18 (`LG-2026-00115`), cuja coluna
+> `data` traz `15-06-2026` em vez de `14/06/2026` — separador e dia
+> diferentes do resto. Validar *formato* e *coerência* de data não é
+> nenhuma das regras RN01–RN07 do PDD: a `data` só é verificada quanto a
+> estar preenchida (RN02), e `15-06-2026` está preenchida. Portanto o bot
+> classificar esse lote como conforme é o resultado **correto dado o
+> escopo do PDD** — não um bug. Cobrir esse caso exigiria uma regra nova,
+> fora do escopo desta issue.
+
+## Camada BotCity (v0.2.1)
 
 Fundação de execução do bot como robô BotCity: configuração via `.env`,
 logging em arquivo e validação fail-fast de pré-requisitos, em `src/bot/`.
+
+> **v0.2.1:** o bot passou a operar sobre o dado real do exercício (a
+> planilha oficial da LG), via o preprocessor descrito na seção acima. Até
+> a v0.2.0 o fluxo rodava sobre um CSV fictício escrito à mão.
 
 **Configuração:**
 
@@ -68,11 +115,12 @@ python -m scripts.dispatcher
 `MAESTRO_ENABLED=false` (padrão), o Dispatcher roda em modo dry-run: lê o
 CSV, loga cada item que seria enviado, mas não contata o Maestro.
 
-O CSV de entrada fica em `dados_entrada/lotes_auditoria.csv`. Este arquivo
-é versionado no repositório (não está no `.gitignore`) porque também serve
-de massa de teste para a Issue #21 (Performer): traz linhas válidas e
-linhas com erros propositais (lote_id vazio, status ambíguo, reprovado sem
-observação, turno vazio).
+O CSV de entrada fica em `dados_entrada/lotes_auditoria.csv` e é **gerado
+pelo preprocessor** a partir da planilha oficial — veja
+[Preparando o dado real](#preparando-o-dado-real-issue-26). Ele traz os 25
+lotes do exercício, incluindo os erros propositais (lote_id vazio,
+`responsavel` vazio, status ambíguo, reprovado sem observação, lote fora da
+base de referência).
 
 > ⚠️ **O envio não é idempotente**: rodar o Dispatcher duas vezes acumula
 > itens duplicados na fila — o script não verifica se um lote já foi
@@ -118,11 +166,12 @@ recomendado para desenvolvimento.
 marcam com `ErrorType.SYSTEM`. Em nenhum dos casos o loop é interrompido —
 um item problemático nunca impede o processamento dos seguintes.
 
-**Base de referência (RN03):** usa
-`data/processed/base_lotes_referencia.csv` (versionada no DVC) quando
-presente; se ela não tiver sido baixada com `dvc pull`, recorre
-automaticamente a `data/dev/base_lotes_referencia_dev.csv`, um CSV mínimo
-commitado no repositório para permitir rodar sem o DVC.
+**Base de referência (RN03):** usa exclusivamente
+`data/processed/base_lotes_referencia.csv`, gerado pelo preprocessor. Não
+há mais fallback: se o arquivo não existir, o Performer falha com uma
+mensagem instruindo a rodar `python -m scripts.planilha_para_csv` primeiro.
+A ordem preprocessor → performer é explícita, em vez de resolvida por um
+fallback silencioso.
 
 **Onde ver o resultado:** no painel do Maestro, na task finalizada pela
 execução — o resumo em JSON fica na aba de artefatos dessa task, e o
