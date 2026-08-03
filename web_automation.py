@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -9,9 +10,12 @@ from pathlib import Path
 
 import pandas as pd
 from playwright.sync_api import Page, sync_playwright
+from pythonjsonlogger import jsonlogger
 
-URL = "http://127.0.0.1:8000"
+URL = os.environ.get("WEB_AUTOMATION_URL", "http://127.0.0.1:8000")
 ENGINE = "playwright"
+HEADLESS = os.environ.get("HEADLESS", "false").lower() in ("1", "true", "yes")
+DEFAULT_TIMEOUT_MS = 10_000
 
 BASE_DIR = Path(__file__).resolve().parent
 FIXTURES_DIR = BASE_DIR / "automation_fixtures"
@@ -23,22 +27,46 @@ ARQUIVO_ORIGINAL = Path.home() / "Downloads" / "inspecao_lotes_dia.xlsx"
 ARQUIVO_INSPECAO_REAL = FIXTURES_DIR / "inspecao_real.xlsx"
 ARQUIVO_BASE_REFERENCIA = BASE_DIR / "data" / "processed" / "base_lotes_referencia.csv"
 
+INPUT_FILE_SELECTOR = "#arquivo"
+SUBMIT_BUTTON_SELECTOR = "#btn-enviar"
+RESULT_SECTION_SELECTOR = "#resultado-section:not([hidden])"
+ERROR_MESSAGE_SELECTOR = "#mensagem-erro"
+NO_DIVERGENCIAS_SELECTOR = "#sem-divergencias"
+METRICAS_SELECTOR = "#metricas"
+
 
 def configurar_logger() -> logging.Logger:
     LOGS_DIR.mkdir(exist_ok=True)
     logger = logging.getLogger(f"automacao_web.{ENGINE}")
     logger.setLevel(logging.INFO)
+    execution_id = os.environ.get("EXECUTION_ID") or os.environ.get("EXECUTIONID")
+    bot_id = os.environ.get("BOT_ID") or os.environ.get("BOTID")
+
+    class ContextFilter(logging.Filter):
+        def __init__(self, execution_id: str | None, bot_id: str | None):
+            super().__init__()
+            self.execution_id = execution_id
+            self.bot_id = bot_id
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            record.execution_id = self.execution_id
+            record.bot_id = self.bot_id
+            return True
 
     if not logger.handlers:
-        formatter = logging.Formatter(
-            f"%(asctime)s | {ENGINE.upper():10s} | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        fmt = jsonlogger.JsonFormatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s %(execution_id)s %(bot_id)s",
+            timestamp=True,
         )
-        arquivo = logging.FileHandler(LOGS_DIR / "automacao_web.log", encoding="utf-8")
-        arquivo.setFormatter(formatter)
+
+        arquivo = logging.FileHandler(LOGS_DIR / "automacao_web.jsonl", encoding="utf-8")
+        arquivo.setFormatter(fmt)
+        arquivo.addFilter(ContextFilter(execution_id, bot_id))
         logger.addHandler(arquivo)
 
         console = logging.StreamHandler()
-        console.setFormatter(formatter)
+        console.setFormatter(fmt)
+        console.addFilter(ContextFilter(execution_id, bot_id))
         logger.addHandler(console)
 
     return logger
@@ -110,22 +138,23 @@ def processar_item(page: Page, item: ItemDataPool) -> dict:
     logger.info(f"Item '{item.nome}': iniciando ({item.descricao})")
 
     page.goto(URL)
+    page.wait_for_load_state("domcontentloaded")
 
-    page.set_input_files("#arquivo", str(item.arquivo))
+    page.set_input_files(INPUT_FILE_SELECTOR, str(item.arquivo))
     logger.info(f"Item '{item.nome}': arquivo '{item.arquivo.name}' selecionado")
 
-    page.click("#btn-enviar")
+    page.locator(SUBMIT_BUTTON_SELECTOR).click()
 
-    page.wait_for_selector("#resultado-section:not([hidden])", timeout=10_000)
+    page.wait_for_selector(RESULT_SECTION_SELECTOR, timeout=DEFAULT_TIMEOUT_MS)
 
-    mensagem_erro = page.locator("#mensagem-erro")
+    mensagem_erro = page.locator(ERROR_MESSAGE_SELECTOR)
     if mensagem_erro.is_visible():
         resultado_real = "erro_estrutura"
         texto_resultado = mensagem_erro.inner_text()
     else:
-        sem_divergencias = page.locator("#sem-divergencias")
+        sem_divergencias = page.locator(NO_DIVERGENCIAS_SELECTOR)
         resultado_real = "sem_divergencias" if sem_divergencias.is_visible() else "com_divergencias"
-        texto_resultado = page.locator("#metricas").inner_text()
+        texto_resultado = page.locator(METRICAS_SELECTOR).inner_text()
 
     logger.info(f"Item '{item.nome}': resultado obtido = '{resultado_real}' | {texto_resultado!r}")
 
@@ -172,7 +201,7 @@ def main() -> int:
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(headless=HEADLESS)
             page = browser.new_page()
 
             for item in DATAPOOL:
