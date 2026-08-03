@@ -17,6 +17,7 @@ import pandas as pd
 
 from src.bot import config
 from src.bot.bot import setup_logger
+from src.modules.validacao import COLUNAS_ESPERADAS
 
 try:
     from botcity.maestro import BotMaestroSDK
@@ -27,10 +28,6 @@ except ImportError:
 
 DATAPOOL_LABEL = "FilaAuditoriaLotes-Eqp04"
 ARQUIVO_CSV = "lotes_auditoria.csv"  # dentro de PASTA_ENTRADA
-COLUNAS_ESPERADAS = [
-    "lote_id", "produto", "linha", "turno",
-    "status", "responsavel", "data", "observacao",
-]
 
 
 class DispatcherError(Exception):

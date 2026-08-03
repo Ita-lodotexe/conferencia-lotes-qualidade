@@ -19,6 +19,7 @@ import pandas as pd
 from src.bot import config
 from src.bot.bot import setup_logger
 from src.bot.vault_client import VaultError, obter_credencial_erp
+from src.modules.validacao import COLUNAS_ESPERADAS
 from src.modules.verificacao_lotes import carregar_base_referencia
 from src.relatorio import avaliar_lote
 
@@ -36,10 +37,6 @@ except ImportError:
     ErrorType = None
 
 DATAPOOL_LABEL = "FilaAuditoriaLotes-Eqp04"
-COLUNAS_ESPERADAS = [
-    "lote_id", "produto", "linha", "turno",
-    "status", "responsavel", "data", "observacao",
-]
 ARQUIVO_CSV = "lotes_auditoria.csv"  # dentro de PASTA_ENTRADA, usado no dry-run
 
 # Caminho versionado pelo DVC; quando ausente (sem `dvc pull`), recorre-se
