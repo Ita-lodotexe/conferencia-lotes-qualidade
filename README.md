@@ -24,8 +24,8 @@ Os logs de execução são gravados em `logs/execucao.log` (e também exibidos
 no terminal).
 
 > **Nota:** esta versão entrega a fundação (config, logs, validação
-> fail-fast da pasta de entrada) e o cofre de credenciais (seção abaixo).
-> A integração real com a fila/DataPool do Maestro fica para a issue #19.
+> fail-fast da pasta de entrada), o cofre de credenciais e o Dispatcher
+> da fila (seções abaixo).
 
 ## Cofre de credenciais
 
@@ -50,6 +50,38 @@ o Vault ou o SDK falharem, o `vault_client` loga só o *tipo* da exceção
 e relança uma `VaultError` genérica — quem chama a função nunca vê a
 exceção original do SDK, só uma mensagem apontando para checar
 `BOTCITY_SERVER`/`BOTCITY_LOGIN`/`BOTCITY_KEY`.
+
+## Dispatcher (Issue #19)
+
+`scripts/dispatcher.py` lê `dados_entrada/lotes_auditoria.csv` e envia cada
+linha como um item (`DataPoolEntry`) para o DataPool
+`FilaAuditoriaLotes-Eqp04` no BotCity Maestro, usando o `BotMaestroSDK`.
+
+**Como rodar:**
+
+```bash
+python -m scripts.dispatcher
+```
+
+**Requisitos:** `.env` com `MAESTRO_ENABLED=true` e credenciais válidas
+(`BOTCITY_SERVER`, `BOTCITY_LOGIN`, `BOTCITY_KEY`). Com
+`MAESTRO_ENABLED=false` (padrão), o Dispatcher roda em modo dry-run: lê o
+CSV, loga cada item que seria enviado, mas não contata o Maestro.
+
+O CSV de entrada fica em `dados_entrada/lotes_auditoria.csv`. Este arquivo
+é versionado no repositório (não está no `.gitignore`) porque também serve
+de massa de teste para a Issue #21 (Performer): traz linhas válidas e
+linhas com erros propositais (lote_id vazio, status ambíguo, reprovado sem
+observação, turno vazio).
+
+> ⚠️ **O envio não é idempotente**: rodar o Dispatcher duas vezes acumula
+> itens duplicados na fila — o script não verifica se um lote já foi
+> enviado antes. O log de início de execução avisa sobre isso.
+> Falha ao enviar um item individual não aborta o restante do lote (o
+> Dispatcher segue para o próximo e reporta o total de falhas no fim).
+
+Logs de execução em `logs/execucao.log` (mesmo arquivo usado pelo restante
+do bot). Testes em [tests/test_dispatcher.py](tests/test_dispatcher.py).
 
 ## Interface web
 

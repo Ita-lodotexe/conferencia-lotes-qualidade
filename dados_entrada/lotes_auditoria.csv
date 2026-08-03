@@ -1,0 +1,8 @@
+lote_id,produto,linha,turno,status,responsavel,data,observacao
+L001,Camiseta Preta M,LINHA_A,MANHA,APROVADO,Ana Silva,2026-07-15,
+L002,Calça Jeans 42,LINHA_B,TARDE,REPROVADO,Bruno Costa,2026-07-15,Costura irregular na barra
+L003,Camiseta Branca G,LINHA_A,NOITE,APROVADO,Ana Silva,2026-07-16,
+,Boné Azul,LINHA_C,MANHA,APROVADO,Carla Dias,2026-07-16,
+L005,Meia Esportiva,LINHA_B,TARDE,REPROV.,Diogo Melo,2026-07-16,
+L006,Camiseta Cinza P,LINHA_A,MANHA,REPROVADO,Erika Nunes,2026-07-17,
+L007,Bermuda Preta,LINHA_C,,APROVADO,Fabio Prado,2026-07-17,
