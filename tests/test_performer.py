@@ -9,11 +9,13 @@ dado sensível pode chegar ao log).
 import json
 import logging
 from unittest.mock import MagicMock
-
+from pathlib import Path
 import pandas as pd
 import pytest
 
 from src.bot import config, performer
+
+FIXTURE_BASE_REFERENCIA = Path(__file__).parent / "fixtures" / "base_lotes_referencia.csv"
 
 TASK_ID = 4242
 
@@ -31,8 +33,7 @@ LOTES_DA_FILA = [
 
 @pytest.fixture
 def base_ref():
-    return pd.read_csv(performer.BASE_REFERENCIA_FALLBACK)
-
+    return pd.read_csv(FIXTURE_BASE_REFERENCIA)
 
 @pytest.fixture(autouse=True)
 def isola_ambiente(monkeypatch):
@@ -91,10 +92,14 @@ def _resumo_do_artefato():
         return json.load(arquivo)
 
 
-def test_dry_run_nao_chama_sdk(monkeypatch, tmp_path, caplog):
+def test_dry_run_nao_chama_sdk(monkeypatch, base_ref, tmp_path, caplog):
     sdk_classe_mock = MagicMock()
     monkeypatch.setattr(performer, "BotMaestroSDK", sdk_classe_mock)
     monkeypatch.setattr(config, "PASTA_ENTRADA", str(tmp_path))
+    # main() carrega a base de referência do disco; sem este patch o teste
+    # passaria a depender do conteúdo de data/processed/, que é gerado pelo
+    # preprocessor e usa o domínio real (LG-2026-*), não o fictício abaixo.
+    monkeypatch.setattr(performer, "carregar_base_referencia", lambda caminho: base_ref)
 
     # L001 conforme, L002 conforme (reprovado com observação), L007 inativo -> RN03
     (tmp_path / performer.ARQUIVO_CSV).write_text(
