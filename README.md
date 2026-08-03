@@ -83,6 +83,55 @@ observação, turno vazio).
 Logs de execução em `logs/execucao.log` (mesmo arquivo usado pelo restante
 do bot). Testes em [tests/test_dispatcher.py](tests/test_dispatcher.py).
 
+## Performer (Issue #21)
+
+`src/bot/performer.py` é o outro lado do Dispatcher: consome os itens do
+DataPool `FilaAuditoriaLotes-Eqp04`, aplica RN01–RN07 em cada lote e
+publica o resultado no Maestro.
+
+**Como rodar:**
+
+```bash
+python -m src.bot.performer
+```
+
+**O que ele faz, em ordem:** autentica no Maestro → cria uma
+`AutomationTask` real → puxa item por item da fila
+(`report_done` quando o lote está conforme, `report_error` quando não) →
+escreve o resumo em JSON e o anexa à task via `post_artifact` →
+encerra a task com `finish_task`.
+
+**Requisitos:** `.env` com credenciais válidas, `BOTCITY_ACTIVITY_LABEL`
+apontando para uma **Automation já cadastrada no painel** do Maestro, e a
+fila previamente populada pelo [Dispatcher](#dispatcher-issue-19).
+A `activity_label` não é opcional: artefatos e alertas só podem ser
+anexados a uma task existente — o servidor rejeita identificadores
+inventados com `404`.
+
+**Modo dry-run:** com `MAESTRO_ENABLED=false`, o Performer lê
+`dados_entrada/lotes_auditoria.csv` direto do disco e aplica as mesmas
+regras, sem criar task, consumir fila ou postar artefato. É o modo
+recomendado para desenvolvimento.
+
+**Classificação de erros na fila:** divergências de regra de negócio
+(RN02–RN07) marcam o item com `ErrorType.BUSINESS`; exceções inesperadas
+marcam com `ErrorType.SYSTEM`. Em nenhum dos casos o loop é interrompido —
+um item problemático nunca impede o processamento dos seguintes.
+
+**Base de referência (RN03):** usa
+`data/processed/base_lotes_referencia.csv` (versionada no DVC) quando
+presente; se ela não tiver sido baixada com `dvc pull`, recorre
+automaticamente a `data/dev/base_lotes_referencia_dev.csv`, um CSV mínimo
+commitado no repositório para permitir rodar sem o DVC.
+
+**Onde ver o resultado:** no painel do Maestro, na task finalizada pela
+execução — o resumo em JSON fica na aba de artefatos dessa task, e o
+status final (`SUCCESS` ou `PARTIALLY_COMPLETED`) reflete se houve
+divergências. Os logs locais ficam em `logs/execucao.log`.
+
+Testes em [tests/test_performer.py](tests/test_performer.py) e
+[tests/test_avaliar_lote.py](tests/test_avaliar_lote.py).
+
 ## Interface web
 
 O bot pode ser operado por uma página única no navegador: upload do

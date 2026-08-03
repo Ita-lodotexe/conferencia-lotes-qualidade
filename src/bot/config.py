@@ -15,6 +15,7 @@ BOTCITY_WORKSPACE = os.getenv("BOTCITY_WORKSPACE")
 BOTCITY_SERVER: str = os.getenv("BOTCITY_SERVER", "")
 BOTCITY_LOGIN = os.getenv("BOTCITY_LOGIN")
 BOTCITY_KEY = os.getenv("BOTCITY_KEY")
+BOTCITY_ACTIVITY_LABEL: str = os.getenv("BOTCITY_ACTIVITY_LABEL", "")
 
 # Identificadores da credencial do ERP no Credentials Vault
 VAULT_CREDENCIAL_ERP_LABEL: str = "credencial_erp_eqp04"
