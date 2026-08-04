@@ -216,4 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local fixtures used for automated tests
 automation_fixtures/
+
+# Bot — logs de execução
+logs/

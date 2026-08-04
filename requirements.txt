@@ -9,3 +9,4 @@ httpx
 playwright
 python-json-logger
 python-dotenv
+botcity-maestro-sdk==0.9.0

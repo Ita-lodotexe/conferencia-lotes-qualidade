@@ -12,18 +12,114 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.modules.validacao import valida_campos_obrigatorios, valida_estrutura
-from src.modules.verificacao_lotes import verificar_status_lote
+from src.modules.validacao import (
+    COLUNAS_ESPERADAS,
+    valida_campos_obrigatorios,
+    valida_estrutura,
+)
+from src.modules.verificacao_lotes import carregar_base_referencia, verificar_status_lote
 from src.modules.normalizacao_status import validar_status
 from src.modules.observacao import lote_conforme_rn07
 
+CAMINHO_BASE_REFERENCIA = "data/processed/base_lotes_referencia.csv"
+
 REGRAS_DESCRICAO = {
+    "INFRA": "Erro de infraestrutura",
     "RN01": "Estrutura da planilha",
     "RN02": "Campo obrigatório vazio",
     "RN03": "Existência/status do lote",
     "RN06": "Status ambíguo",
     "RN07": "Observação em lote reprovado",
 }
+
+
+def avaliar_lote(lote: dict, base_referencia: pd.DataFrame) -> list[dict]:
+    """Aplica RN02-RN07 sobre um único lote e retorna divergências.
+
+    RN01 (estrutura) não é aplicável a um único lote — é responsabilidade
+    do chamador validar que todas as chaves esperadas estão presentes
+    antes de invocar esta função. RN02-RN07 são aplicadas em ordem:
+    campos obrigatórios, existência do lote, normalização/validação de
+    status (incluindo RN06 ambíguo), e observação em reprovado.
+
+    Args:
+        lote: dict com pelo menos as chaves de COLUNAS_ESPERADAS
+            (lote_id, produto, linha, turno, status, responsavel, data,
+            observacao). Valores como string vazia ou None são tratados
+            como "vazio" nas regras que dependem disso.
+        base_referencia: DataFrame carregado via carregar_base_referencia,
+            com pelo menos as colunas lote_id e status_cadastro.
+
+    Returns:
+        Lista de divergências. Cada divergência é um dict com chaves
+        'regra' (RN02-RN07), 'campo' (quando aplicável), 'descricao'.
+        Lista vazia significa lote 100% conforme.
+    """
+    divergencias: list[dict] = []
+
+    # RN02 — reaproveita a validação de campos obrigatórios do módulo de
+    # validação, para manter a mesma semântica de "vazio" (None, NaN ou
+    # texto em branco) usada no restante do projeto.
+    for ocorrencia in valida_campos_obrigatorios(pd.DataFrame([lote])):
+        divergencias.append(
+            {
+                "regra": "RN02",
+                "campo": ocorrencia["campo"],
+                "descricao": f"Campo obrigatório '{ocorrencia['campo']}' vazio.",
+            }
+        )
+
+    lote_id = lote.get("lote_id")
+
+    # RN03 — existência e situação cadastral do lote na base de referência.
+    status_lote = verificar_status_lote(base_referencia, lote_id) if pd.notna(lote_id) else None
+    if status_lote is None:
+        divergencias.append(
+            {
+                "regra": "RN03",
+                "campo": "lote_id",
+                "descricao": f"Lote '{lote_id}' não encontrado na base de referência.",
+            }
+        )
+    elif status_lote is False:
+        divergencias.append(
+            {
+                "regra": "RN03",
+                "campo": "lote_id",
+                "descricao": f"Lote '{lote_id}' está inativo na base de referência.",
+            }
+        )
+
+    # RN04/RN05/RN06 — validar_status normaliza (RN05) e classifica como
+    # ambíguo (RN06) tudo o que não é status permitido (RN04).
+    resultado_status = validar_status(lote.get("status"))
+    if resultado_status["ambiguo"]:
+        divergencias.append(
+            {
+                "regra": "RN06",
+                "campo": "status",
+                "descricao": f"Status '{resultado_status['status_original']}' é ambíguo e requer revisão manual.",
+            }
+        )
+
+    # RN07 — recebe o status já normalizado ('REPROVADO'), nunca o valor
+    # bruto, para não depender das variações aceitas pela RN05.
+    observacao = lote.get("observacao")
+    lote_normalizado = {
+        "lote_id": lote_id,
+        "status": resultado_status["status_normalizado"],
+        "observacao": None if pd.isna(observacao) else observacao,
+    }
+    if not lote_conforme_rn07(lote_normalizado):
+        divergencias.append(
+            {
+                "regra": "RN07",
+                "campo": "observacao",
+                "descricao": "Lote reprovado sem observação preenchida.",
+            }
+        )
+
+    return divergencias
 
 
 def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
@@ -37,6 +133,21 @@ def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
         dict com "resumo" (métricas agregadas), "divergencias" (lista de
         ocorrências) e "arquivo" (caminho_saida, para conveniência).
     """
+    try:
+        base_referencia = carregar_base_referencia(CAMINHO_BASE_REFERENCIA)
+    except Exception as erro:
+        divergencias = [
+            {
+                "linha": None,
+                "lote_id": None,
+                "regra": "INFRA",
+                "descricao": f"Não foi possível carregar a base de referência de lotes: {erro}",
+            }
+        ]
+        resumo = _monta_resumo(relatorio, divergencias, estrutura_valida=False)
+        _exporta_divergencias(divergencias, resumo, caminho_saida)
+        return {"resumo": resumo, "divergencias": divergencias, "arquivo": caminho_saida}
+
     campos_faltantes = valida_estrutura(relatorio)
 
     if campos_faltantes:
@@ -54,65 +165,38 @@ def gerar_relatorio(relatorio: pd.DataFrame, caminho_saida: str) -> dict:
 
     divergencias = []
 
-    for ocorrencia in valida_campos_obrigatorios(relatorio):
-        linha = ocorrencia["linha"]
-        lote_id = relatorio.loc[linha - 2, "lote_id"]
-        divergencias.append(
-            {
-                "linha": linha,
-                "lote_id": lote_id,
-                "regra": "RN02",
-                "descricao": f"Campo obrigatório '{ocorrencia['campo']}' vazio.",
-            }
-        )
-
+    avaliacoes = []
     for indice, linha in relatorio.iterrows():
-        numero_linha = indice + 2
-        lote_id = linha.get("lote_id")
+        lote = {coluna: linha.get(coluna) for coluna in COLUNAS_ESPERADAS}
+        avaliacoes.append((indice, lote.get("lote_id"), avaliar_lote(lote, base_referencia)))
 
-        status_lote = verificar_status_lote(lote_id) if pd.notna(lote_id) else None
-        if status_lote is None:
+    # As duas passadas abaixo preservam o formato histórico do relatório:
+    # as divergências RN02 vêm primeiro e referenciam o índice do
+    # DataFrame, enquanto as demais vêm depois e referenciam o número da
+    # linha na planilha (índice + 2).
+    for indice, lote_id, divergencias_do_lote in avaliacoes:
+        for divergencia in divergencias_do_lote:
+            if divergencia["regra"] != "RN02":
+                continue
             divergencias.append(
                 {
-                    "linha": numero_linha,
+                    "linha": indice,
                     "lote_id": lote_id,
-                    "regra": "RN03",
-                    "descricao": f"Lote '{lote_id}' não encontrado na base de referência.",
-                }
-            )
-        elif status_lote is False:
-            divergencias.append(
-                {
-                    "linha": numero_linha,
-                    "lote_id": lote_id,
-                    "regra": "RN03",
-                    "descricao": f"Lote '{lote_id}' está inativo na base de referência.",
+                    "regra": divergencia["regra"],
+                    "descricao": divergencia["descricao"],
                 }
             )
 
-        resultado_status = validar_status(linha.get("status"))
-        if resultado_status["ambiguo"]:
+    for indice, lote_id, divergencias_do_lote in avaliacoes:
+        for divergencia in divergencias_do_lote:
+            if divergencia["regra"] == "RN02":
+                continue
             divergencias.append(
                 {
-                    "linha": numero_linha,
+                    "linha": indice + 2,
                     "lote_id": lote_id,
-                    "regra": "RN06",
-                    "descricao": f"Status '{resultado_status['status_original']}' é ambíguo e requer revisão manual.",
-                }
-            )
-
-        observacao = linha.get("observacao")
-        lote_normalizado = {
-            "status": resultado_status["status_normalizado"],
-            "observacao": None if pd.isna(observacao) else observacao,
-        }
-        if not lote_conforme_rn07(lote_normalizado):
-            divergencias.append(
-                {
-                    "linha": numero_linha,
-                    "lote_id": lote_id,
-                    "regra": "RN07",
-                    "descricao": "Lote reprovado sem observação preenchida.",
+                    "regra": divergencia["regra"],
+                    "descricao": divergencia["descricao"],
                 }
             )
 

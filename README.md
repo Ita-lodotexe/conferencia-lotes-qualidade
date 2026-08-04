@@ -1,5 +1,186 @@
 # conferencia-lotes-qualidade
 
+## Preparando o dado real (issue #26)
+
+A planilha oficial do exercício fica em
+`dados_referencia/inspecao_lotes_dia.xlsx`. Ela tem formato humano (3 abas,
+títulos, rodapé, legenda de cores, nota do revisor) e por isso não é
+consumida diretamente pelo bot: um preprocessor traduz o formato humano
+para os CSVs que o restante do fluxo já sabe ler.
+
+```bash
+python -m scripts.planilha_para_csv
+```
+
+Isso gera dois arquivos:
+
+| Saída | Origem | Conteúdo | Consumido por |
+|---|---|---|---|
+| `dados_entrada/lotes_auditoria.csv` | aba `Inspecao_14_06_2026` | 25 lotes | Dispatcher (fila) e Performer (dry-run) |
+| `data/processed/base_lotes_referencia.csv` | aba `Base_Referencia` | 23 lotes cadastrados | Performer (RN03) |
+
+O preprocessor corta as linhas de lixo (rodapé `Total de registros`,
+legenda de cores, nota do revisor) por limite de posição, e normaliza
+células vazias do Excel para string vazia — evitando que `NaN` do pandas
+chegue ao DataPool do Maestro, onde não é JSON válido.
+
+**Fluxo operacional completo:**
+
+```bash
+python -m scripts.planilha_para_csv   # 1. planilha oficial -> CSVs
+python -m scripts.dispatcher          # 2. CSV -> fila no Maestro
+python -m src.bot.performer           # 3. fila -> validação RN01-RN07
+```
+
+> ⚠️ **Divergência conhecida entre a planilha e o resultado do bot.** A
+> planilha marca visualmente 8 lotes como divergentes entre os 25; o bot
+> detecta 7. A diferença é a linha 18 (`LG-2026-00115`), cuja coluna
+> `data` traz `15-06-2026` em vez de `14/06/2026` — separador e dia
+> diferentes do resto. Validar *formato* e *coerência* de data não é
+> nenhuma das regras RN01–RN07 do PDD: a `data` só é verificada quanto a
+> estar preenchida (RN02), e `15-06-2026` está preenchida. Portanto o bot
+> classificar esse lote como conforme é o resultado **correto dado o
+> escopo do PDD** — não um bug. Cobrir esse caso exigiria uma regra nova,
+> fora do escopo desta issue.
+
+## Camada BotCity (v0.2.1)
+
+Fundação de execução do bot como robô BotCity: configuração via `.env`,
+logging em arquivo e validação fail-fast de pré-requisitos, em `src/bot/`.
+
+> **v0.2.1:** o bot passou a operar sobre o dado real do exercício (a
+> planilha oficial da LG), via o preprocessor descrito na seção acima. Até
+> a v0.2.0 o fluxo rodava sobre um CSV fictício escrito à mão.
+
+**Configuração:**
+
+```bash
+cp .env.example .env
+# preencha BOTCITY_WORKSPACE, BOTCITY_SERVER, BOTCITY_LOGIN e BOTCITY_KEY
+# com os valores do painel do BotCity Maestro
+# (https://developers.botcity.dev/app/ → Ambiente do desenvolvedor)
+```
+
+**Rodando o bot localmente:**
+
+```bash
+python -m src.bot.main
+```
+
+Os logs de execução são gravados em `logs/execucao.log` (e também exibidos
+no terminal).
+
+> **Nota:** esta versão entrega a fundação (config, logs, validação
+> fail-fast da pasta de entrada), o cofre de credenciais e o Dispatcher
+> da fila (seções abaixo).
+
+## Cofre de credenciais
+
+`src/bot/vault_client.py` expõe `obter_credencial_erp() -> (usuario, senha)`,
+usada para autenticar no ERP sem nenhuma senha hardcoded no código.
+
+A flag `VAULT_ENABLED` (no `.env`) alterna o comportamento:
+
+- **`VAULT_ENABLED=false`** (padrão, modo local/desenvolvimento): retorna
+  uma credencial fictícia (`"bot_local"` / `"senha_dev"`) sem tocar no SDK
+  do BotCity — não precisa nem de rede nem de credenciais reais para
+  desenvolver.
+- **`VAULT_ENABLED=true`**: faz login no BotCity Maestro
+  (`BOTCITY_SERVER` + `BOTCITY_LOGIN` + `BOTCITY_KEY`, configurados no
+  `.env`, nunca commitados) e busca a credencial real
+  `credencial_erp_eqp04` (chaves `usuario`/`senha`) no Credentials Vault
+  do workspace.
+
+**A senha nunca é logada em nenhum modo**, incluindo o caminho de erro: se
+o Vault ou o SDK falharem, o `vault_client` loga só o *tipo* da exceção
+(nunca `str(exception)`, que poderia ecoar conteúdo sensível do servidor)
+e relança uma `VaultError` genérica — quem chama a função nunca vê a
+exceção original do SDK, só uma mensagem apontando para checar
+`BOTCITY_SERVER`/`BOTCITY_LOGIN`/`BOTCITY_KEY`.
+
+## Dispatcher (Issue #19)
+
+`scripts/dispatcher.py` lê `dados_entrada/lotes_auditoria.csv` e envia cada
+linha como um item (`DataPoolEntry`) para o DataPool
+`FilaAuditoriaLotes-Eqp04` no BotCity Maestro, usando o `BotMaestroSDK`.
+
+**Como rodar:**
+
+```bash
+python -m scripts.dispatcher
+```
+
+**Requisitos:** `.env` com `MAESTRO_ENABLED=true` e credenciais válidas
+(`BOTCITY_SERVER`, `BOTCITY_LOGIN`, `BOTCITY_KEY`). Com
+`MAESTRO_ENABLED=false` (padrão), o Dispatcher roda em modo dry-run: lê o
+CSV, loga cada item que seria enviado, mas não contata o Maestro.
+
+O CSV de entrada fica em `dados_entrada/lotes_auditoria.csv` e é **gerado
+pelo preprocessor** a partir da planilha oficial — veja
+[Preparando o dado real](#preparando-o-dado-real-issue-26). Ele traz os 25
+lotes do exercício, incluindo os erros propositais (lote_id vazio,
+`responsavel` vazio, status ambíguo, reprovado sem observação, lote fora da
+base de referência).
+
+> ⚠️ **O envio não é idempotente**: rodar o Dispatcher duas vezes acumula
+> itens duplicados na fila — o script não verifica se um lote já foi
+> enviado antes. O log de início de execução avisa sobre isso.
+> Falha ao enviar um item individual não aborta o restante do lote (o
+> Dispatcher segue para o próximo e reporta o total de falhas no fim).
+
+Logs de execução em `logs/execucao.log` (mesmo arquivo usado pelo restante
+do bot). Testes em [tests/test_dispatcher.py](tests/test_dispatcher.py).
+
+## Performer (Issue #21)
+
+`src/bot/performer.py` é o outro lado do Dispatcher: consome os itens do
+DataPool `FilaAuditoriaLotes-Eqp04`, aplica RN01–RN07 em cada lote e
+publica o resultado no Maestro.
+
+**Como rodar:**
+
+```bash
+python -m src.bot.performer
+```
+
+**O que ele faz, em ordem:** autentica no Maestro → cria uma
+`AutomationTask` real → puxa item por item da fila
+(`report_done` quando o lote está conforme, `report_error` quando não) →
+escreve o resumo em JSON e o anexa à task via `post_artifact` →
+encerra a task com `finish_task`.
+
+**Requisitos:** `.env` com credenciais válidas, `BOTCITY_ACTIVITY_LABEL`
+apontando para uma **Automation já cadastrada no painel** do Maestro, e a
+fila previamente populada pelo [Dispatcher](#dispatcher-issue-19).
+A `activity_label` não é opcional: artefatos e alertas só podem ser
+anexados a uma task existente — o servidor rejeita identificadores
+inventados com `404`.
+
+**Modo dry-run:** com `MAESTRO_ENABLED=false`, o Performer lê
+`dados_entrada/lotes_auditoria.csv` direto do disco e aplica as mesmas
+regras, sem criar task, consumir fila ou postar artefato. É o modo
+recomendado para desenvolvimento.
+
+**Classificação de erros na fila:** divergências de regra de negócio
+(RN02–RN07) marcam o item com `ErrorType.BUSINESS`; exceções inesperadas
+marcam com `ErrorType.SYSTEM`. Em nenhum dos casos o loop é interrompido —
+um item problemático nunca impede o processamento dos seguintes.
+
+**Base de referência (RN03):** usa exclusivamente
+`data/processed/base_lotes_referencia.csv`, gerado pelo preprocessor. Não
+há mais fallback: se o arquivo não existir, o Performer falha com uma
+mensagem instruindo a rodar `python -m scripts.planilha_para_csv` primeiro.
+A ordem preprocessor → performer é explícita, em vez de resolvida por um
+fallback silencioso.
+
+**Onde ver o resultado:** no painel do Maestro, na task finalizada pela
+execução — o resumo em JSON fica na aba de artefatos dessa task, e o
+status final (`SUCCESS` ou `PARTIALLY_COMPLETED`) reflete se houve
+divergências. Os logs locais ficam em `logs/execucao.log`.
+
+Testes em [tests/test_performer.py](tests/test_performer.py) e
+[tests/test_avaliar_lote.py](tests/test_avaliar_lote.py).
+
 ## Interface web
 
 O bot pode ser operado por uma página única no navegador: upload do
