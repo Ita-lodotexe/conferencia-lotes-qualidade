@@ -51,7 +51,7 @@ def _criar_driver(options: Options) -> webdriver.Chrome:
 
 
 def run() -> int:
-    logger = configurar_logger()
+    logger = configurar_logger("selenium")
     logger.info("=== Iniciando automação Selenium ===")
 
     EVIDENCIAS_DIR.mkdir(exist_ok=True)

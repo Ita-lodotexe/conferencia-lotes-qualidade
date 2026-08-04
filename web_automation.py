@@ -31,9 +31,10 @@ ARQUIVO_BASE_REFERENCIA = BASE_DIR / "data" / "processed" / "base_lotes_referenc
 
 
 
-def configurar_logger() -> logging.Logger:
+def configurar_logger(nome_engine: str | None = None) -> logging.Logger:
+    nome_engine = nome_engine or ENGINE
     LOGS_DIR.mkdir(exist_ok=True)
-    logger = logging.getLogger(f"automacao_web.{ENGINE}")
+    logger = logging.getLogger(f"automacao_web.{nome_engine}")
     logger.setLevel(logging.INFO)
     execution_id = os.environ.get("EXECUTION_ID") or os.environ.get("EXECUTIONID")
     bot_id = os.environ.get("BOT_ID") or os.environ.get("BOTID")
