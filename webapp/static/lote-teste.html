@@ -372,7 +372,7 @@
             <div class="divider"></div>
 
             <!-- Adicionado o ID formCadastro -->
-            <form id="formCadastro" action="#" method="POST">
+            <form id="formCadastro" action="#" method="POST" novalidate>
                 
                 <div class="form-group">
                     <label for="lote">Número do Lote <span>*</span></label>
@@ -457,14 +457,9 @@
         const erroMensagem = document.getElementById('erroMensagem');
 
         const STATUS_VALIDOS = ['APROVADO', 'REPROVADO', 'PENDENTE'];
-        const MAPA_STATUS = {
-            OK: 'APROVADO',
-            NOK: 'REPROVADO',
-        };
 
         function normalizarStatus(valor) {
-            const status = String(valor || '').trim().toUpperCase();
-            return MAPA_STATUS[status] || status || null;
+            return String(valor || '').trim().toUpperCase() || null;
         }
 
         function validarStatus(statusOriginal) {
