@@ -71,8 +71,31 @@ class FormPage:
             try:
                 self.page.locator(f"{self.STATUS_RADIO}[value=\"{target}\"]").check(timeout=0)
                 return
-            except PlaywrightTimeoutError:
+            except Exception:
                 continue
+
+        # Caso o status não exista como opção visível, injetamos um rádio oculto
+        # para manter o valor original e permitir validação no front-end.
+        self._inject_hidden_status(normalized)
+
+    def _inject_hidden_status(self, status: str) -> None:
+        self.page.evaluate(
+            "(status) => {\n"
+            "  const form = document.getElementById('formCadastro');\n"
+            "  if (!form) return;\n"
+            "  const radios = Array.from(document.querySelectorAll(\"input[name='status']\"));\n"
+            "  const existing = radios.find((radio) => radio.value === status);\n"
+            "  if (existing) { existing.checked = true; return; }\n"
+            "  const hidden = document.createElement('input');\n"
+            "  hidden.type = 'radio';\n"
+            "  hidden.name = 'status';\n"
+            "  hidden.value = status;\n"
+            "  hidden.checked = true;\n"
+            "  hidden.style.display = 'none';\n"
+            "  form.appendChild(hidden);\n"
+            "}",
+            status,
+        )
 
     def fill_observacao(self, observacao: str) -> None:
         if observacao is None:

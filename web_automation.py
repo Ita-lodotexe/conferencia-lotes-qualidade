@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 from playwright.sync_api import Page, sync_playwright
@@ -14,21 +16,25 @@ from pythonjsonlogger import jsonlogger
 
 from src.pages.upload_page import UploadPage
 
-URL = os.environ.get("WEB_AUTOMATION_URL", "http://127.0.0.1:8000")
+EM_CONTAINER = os.environ.get("ENVIRONMENT", "local") != "local"
+URL = os.environ.get("WEB_AUTOMATION_URL", "http://webapp:8000" if EM_CONTAINER else "http://127.0.0.1:8000")
 ENGINE = "playwright"
-HEADLESS = os.environ.get("HEADLESS", "false").lower() in ("1", "true", "yes")
+HEADLESS = os.environ.get("HEADLESS", "false").lower() in ("1", "true", "yes") or EM_CONTAINER
+CONTAINER_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
 DEFAULT_TIMEOUT_MS = 10_000
 
 BASE_DIR = Path(__file__).resolve().parent
 FIXTURES_DIR = BASE_DIR / "automation_fixtures"
 EVIDENCIAS_DIR = BASE_DIR / "evidencias"
 LOGS_DIR = BASE_DIR / "logs"
-TEMPOS_PATH = EVIDENCIAS_DIR / "tempos_execucao.json"
-
-ARQUIVO_ORIGINAL = Path.home() / "Downloads" / "inspecao_lotes_dia.xlsx"
+SCREENSHOTS_DIR = BASE_DIR / "screenshots"
+REPORTS_DIR = BASE_DIR / "reports"
+DATA_OUTPUT_DIR = BASE_DIR / "data" / "output"
+DATA_RAW_DIR = BASE_DIR / "data" / "raw"
+FALLBACK_ORIGINAL = DATA_RAW_DIR / "inspecao_lotes_dia.xlsx"
+ARQUIVO_ORIGINAL = Path(os.environ.get("WEB_AUTOMATION_ORIGINAL_PATH", "")) if os.environ.get("WEB_AUTOMATION_ORIGINAL_PATH") else FALLBACK_ORIGINAL
 ARQUIVO_INSPECAO_REAL = FIXTURES_DIR / "inspecao_real.xlsx"
 ARQUIVO_BASE_REFERENCIA = BASE_DIR / "data" / "processed" / "base_lotes_referencia.csv"
-
 
 
 def configurar_logger(nome_engine: str | None = None) -> logging.Logger:
@@ -76,6 +82,59 @@ def configurar_logger(nome_engine: str | None = None) -> logging.Logger:
 logger = configurar_logger()
 
 
+def _ensure_directories() -> None:
+    for path in (
+        FIXTURES_DIR,
+        EVIDENCIAS_DIR,
+        LOGS_DIR,
+        SCREENSHOTS_DIR,
+        REPORTS_DIR,
+        DATA_OUTPUT_DIR,
+        ARQUIVO_BASE_REFERENCIA.parent,
+        DATA_RAW_DIR,
+    ):
+        path.mkdir(exist_ok=True, parents=True)
+
+
+def _original_path() -> Path:
+    if ARQUIVO_ORIGINAL.exists():
+        return ARQUIVO_ORIGINAL
+
+    fallback = Path.home() / "Downloads" / "inspecao_lotes_dia.xlsx"
+    if fallback.exists():
+        logger.info(
+            "Usando arquivo original em Downloads porque WEB_AUTOMATION_ORIGINAL_PATH e data/raw não foram encontrados."
+        )
+        return fallback
+
+    raise FileNotFoundError(
+        "Não encontrei o arquivo original de inspeção. Coloque 'inspecao_lotes_dia.xlsx' em data/raw/ ou em Downloads."
+    )
+
+
+def _wait_for_service(url: str, timeout_seconds: int = 30) -> None:
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return
+        except OSError:
+            time.sleep(1)
+
+    raise RuntimeError(f"Serviço '{url}' não ficou disponível em {timeout_seconds}s.")
+
+
+def iniciar_browser(playwright):
+    args = CONTAINER_ARGS if EM_CONTAINER else []
+    if EM_CONTAINER:
+        logger.info("Iniciando Chromium em modo container com flags de container.")
+    return playwright.chromium.launch(headless=HEADLESS, args=args)
+
+
 @dataclass
 class ItemDataPool:
     nome: str
@@ -90,14 +149,9 @@ def preparar_planilha_real() -> None:
         logger.info("Planilha real e base de referência já preparadas, reaproveitando.")
         return
 
-    if not ARQUIVO_ORIGINAL.exists():
-        raise FileNotFoundError(
-            f"Não encontrei {ARQUIVO_ORIGINAL}. Coloque o inspecao_lotes_dia.xlsx original "
-            "em data/raw/ antes de rodar este script."
-        )
-
-    logger.info(f"Preparando dados a partir de {ARQUIVO_ORIGINAL}")
-    xls = pd.ExcelFile(ARQUIVO_ORIGINAL)
+    arquivo_original = _original_path()
+    logger.info(f"Preparando dados a partir de {arquivo_original}")
+    xls = pd.ExcelFile(arquivo_original)
 
     inspecao = pd.read_excel(xls, sheet_name="Inspecao_14_06_2026", header=2)
     inspecao.columns = [str(c).strip() for c in inspecao.columns]
@@ -163,8 +217,8 @@ def processar_item(page: Page, item: ItemDataPool) -> dict:
     else:
         logger.info(f"Item '{item.nome}': resultado confere com o esperado")
 
-    EVIDENCIAS_DIR.mkdir(exist_ok=True)
-    caminho_screenshot = EVIDENCIAS_DIR / f"{item.nome}_{ENGINE}.png"
+    SCREENSHOTS_DIR.mkdir(exist_ok=True)
+    caminho_screenshot = SCREENSHOTS_DIR / f"{item.nome}_{ENGINE}.png"
     page.screenshot(path=str(caminho_screenshot), full_page=True)
     item.screenshot = caminho_screenshot
     logger.info(f"Item '{item.nome}': screenshot salvo em '{caminho_screenshot}'")
@@ -184,8 +238,26 @@ def processar_item(page: Page, item: ItemDataPool) -> dict:
     }
 
 
+def salvar_relatorio(resultados: list[dict]) -> None:
+    DATA_OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+    REPORTS_DIR.mkdir(exist_ok=True, parents=True)
+
+    df = pd.DataFrame(resultados)
+    csv_path = DATA_OUTPUT_DIR / "inspecao_lotes_resultado.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+
+    json_path = REPORTS_DIR / "inspecao_lotes_resultado.json"
+    json_path.write_text(json.dumps(resultados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    logger.info(f"Relatório salvo em '{csv_path}' e resumo de execução em '{json_path}'.")
+
+
 def main() -> int:
     logger.info("=== Iniciando automação Playwright (planilha real) ===")
+
+    logger.info(f"Modo container: {EM_CONTAINER} | URL de automação: {URL}")
+
+    _ensure_directories()
 
     try:
         preparar_planilha_real()
@@ -196,8 +268,11 @@ def main() -> int:
     resultados: list[dict] = []
 
     try:
+        if EM_CONTAINER:
+            _wait_for_service(URL, timeout_seconds=30)
+
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=HEADLESS)
+            browser = iniciar_browser(playwright)
             page = browser.new_page()
 
             for item in DATAPOOL:
@@ -211,6 +286,7 @@ def main() -> int:
         logger.info("=== Automação Playwright finalizada com falha ===")
         return 1
 
+    salvar_relatorio(resultados)
     logger.info("=== Automação Playwright finalizada ===")
     print(json.dumps(resultados, indent=2, ensure_ascii=False))
 

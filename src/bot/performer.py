@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -248,7 +250,8 @@ def _executar_com_maestro(base_ref: pd.DataFrame) -> int:
                 )
             resumo["total_erros_sistema"] += 1
 
-    caminho_resumo = f"/tmp/resumo_performer_{task_id}.json"
+    caminho_resumo = Path("/tmp") / f"resumo_performer_{task_id}.json"
+    caminho_resumo.parent.mkdir(exist_ok=True, parents=True)
     with open(caminho_resumo, "w", encoding="utf-8") as arquivo:
         json.dump(resumo, arquivo, indent=2, ensure_ascii=False)
 

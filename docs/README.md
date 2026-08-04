@@ -1,11 +1,13 @@
 # conferencia-lotes-qualidade
 
+![CI](https://github.com/SEU_USUARIO/SEU_REPO/actions/workflows/ci.yml/badge.svg)
+
 ## Vis�o geral
 
-Este reposit�rio implementa um fluxo de auditoria de lotes com tr�s camadas:
+Este repositório implementa um fluxo de auditoria de lotes com três camadas:
 
 1. **Pr�-processamento de dados**: converte a planilha oficial
-   `dados_referencia/inspecao_lotes_dia.xlsx` em CSVs consum�veis.
+   `dados_referencia/inspecao_lotes_dia.xlsx` em CSVs consumiveis.
 2. **BotCity Maestro**: Dispatcher envia lotes para fila e Performer consome
    a fila aplicando as regras RN02�RN07.
 3. **Automa��o de UI local**: Playwright e Selenium validam o formul�rio de
@@ -215,6 +217,44 @@ A interface permite:
 - download do resultado em Excel.
 
 Consulte `webapp/README.md` para mais detalhes.
+
+---
+
+## Execução com Docker e CI/CD
+
+Este projeto agora suporta execução em container Docker e validação no GitHub Actions.
+
+### Build e execução em container
+
+```bash
+docker compose build
+
+docker compose run --rm bot-conferencia
+```
+
+### Pastas de evidências geradas
+
+Após a execução em container, verifique:
+
+- `logs/`
+- `data/output/`
+- `screenshots/`
+- `reports/`
+
+### Pipeline GitHub Actions
+
+O workflow `.github/workflows/ci.yml` agora inclui:
+
+- `test`: instala dependências e executa `pytest -q`
+- `build-docker`: constrói a imagem, inicia `webapp`, executa `bot-conferencia`, verifica evidências e publica artifacts
+
+### Badges
+
+Adicione o badge do workflow no topo do README após o título:
+
+```md
+![CI](https://github.com/SEU_USUARIO/SEU_REPO/actions/workflows/ci.yml/badge.svg)
+```
 
 ---
 
