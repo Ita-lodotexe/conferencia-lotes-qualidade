@@ -157,6 +157,12 @@ def _show_error_banner(page, message: str) -> None:
     )
 
 
+def _ensure_page(page, browser):
+    if page is None or page.is_closed():
+        return browser.new_page()
+    return page
+
+
 def _login_to_form(page) -> None:
     login_page = LoginPage(page)
     login_page.goto(LOGIN_URL)
@@ -254,6 +260,8 @@ def run() -> int:
 
     df = pd.read_excel(INSPECAO_FILE, engine="openpyxl")
     resultados = []
+    browser = None
+    page = None
 
     try:
         with sync_playwright() as p:
@@ -439,11 +447,20 @@ def run() -> int:
                     "conforme": conforme,
                 })
 
-            browser.close()
-
     except Exception as e:
         logger.exception("Execução Playwright interrompida: %s", e)
         return 1
+    finally:
+        if page is not None:
+            try:
+                page.close()
+            except Exception:
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
     out = Path("evidencias") / "resultados_playwright.json"
     out.write_text(json.dumps(resultados, indent=2, ensure_ascii=False), encoding="utf-8")

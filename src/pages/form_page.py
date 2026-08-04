@@ -19,6 +19,11 @@ class FormPage:
     SUCCESS_LOTE = "#sucessoLote"
     SUCCESS_PRODUTO = "#sucessoProduto"
     SUCCESS_MESSAGE = "#sucessoMensagem"
+    STATUS_MAP = {
+        "OK": "APROVADO",
+        "NOK": "REPROVADO",
+        "REPROV.": "REPROVADO",
+    }
 
     def __init__(self, page: Page):
         self.page = page
@@ -43,31 +48,54 @@ class FormPage:
             return
         self.page.fill(self.PRODUTO_INPUT, str(produto))
 
+    def preencher_lote(self, lote: str) -> None:
+        self.fill_lote(lote)
+
+    def preencher_produto(self, produto: str) -> None:
+        self.fill_produto(produto)
+
+    def selecionar_status(self, status: str) -> None:
+        self.select_status(status)
+
     def select_status(self, status: str) -> None:
         if not status:
             return
 
         normalized = str(status).strip().upper()
-        if normalized not in {"APROVADO", "REPROVADO", "PENDENTE"}:
-            return
+        candidates = [normalized]
+        alias = self.STATUS_MAP.get(normalized)
+        if alias and alias != normalized:
+            candidates.append(alias)
 
-        try:
-            self.page.locator(f"{self.STATUS_RADIO}[value=\"{normalized}\"]").check(timeout=0)
-        except PlaywrightTimeoutError:
-            self.page.evaluate(
-                "(status) => {"
-                "  const form = document.getElementById('formCadastro');"
-                "  if (!form) return;"
-                "  const hidden = document.createElement('input');"
-                "  hidden.type = 'radio';"
-                "  hidden.name = 'status';"
-                "  hidden.value = status;"
-                "  hidden.checked = true;"
-                "  hidden.style.display = 'none';"
-                "  form.appendChild(hidden);"
-                "}",
-                normalized,
-            )
+        for target in candidates:
+            try:
+                self.page.locator(f"{self.STATUS_RADIO}[value=\"{target}\"]").check(timeout=0)
+                return
+            except Exception:
+                continue
+
+        # Caso o status não exista como opção visível, injetamos um rádio oculto
+        # para manter o valor original e permitir validação no front-end.
+        self._inject_hidden_status(normalized)
+
+    def _inject_hidden_status(self, status: str) -> None:
+        self.page.evaluate(
+            "(status) => {\n"
+            "  const form = document.getElementById('formCadastro');\n"
+            "  if (!form) return;\n"
+            "  const radios = Array.from(document.querySelectorAll(\"input[name='status']\"));\n"
+            "  const existing = radios.find((radio) => radio.value === status);\n"
+            "  if (existing) { existing.checked = true; return; }\n"
+            "  const hidden = document.createElement('input');\n"
+            "  hidden.type = 'radio';\n"
+            "  hidden.name = 'status';\n"
+            "  hidden.value = status;\n"
+            "  hidden.checked = true;\n"
+            "  hidden.style.display = 'none';\n"
+            "  form.appendChild(hidden);\n"
+            "}",
+            status,
+        )
 
     def fill_observacao(self, observacao: str) -> None:
         if observacao is None:
@@ -98,6 +126,18 @@ class FormPage:
             "produto": self.page.locator(self.SUCCESS_PRODUTO).inner_text(),
             "mensagem": self.page.locator(self.SUCCESS_MESSAGE).inner_text(),
         }
+
+    def get_title(self) -> str:
+        return self.page.title()
+
+    def get_lote_value(self) -> str:
+        return self.page.locator(self.LOTE_INPUT).input_value()
+
+    def get_produto_value(self) -> str:
+        return self.page.locator(self.PRODUTO_INPUT).input_value()
+
+    def get_selected_status(self) -> str:
+        return self.page.evaluate("document.querySelector('input[name=\\'status\\']:checked').value")
 
     def screenshot(self, path: Path) -> Path:
         self.page.screenshot(path=str(path), full_page=True)

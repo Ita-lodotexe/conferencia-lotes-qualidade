@@ -1,16 +1,39 @@
 version: '3.8'
 
 services:
-  bot:
+  webapp:
     build: .
-    container_name: conferencia_bot
+    container_name: conferencia_webapp
     environment:
-      - EXECUTION_ID=${EXECUTION_ID:-local}
-      - BOT_ID=${BOT_ID:-conferencia_bot}
+      - TZ=America/Manaus
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ENVIRONMENT=container
     volumes:
+      - .:/app
+      - ./dados_referencia:/app/data/raw
       - ./logs:/app/logs
-      - ./evidencias:/app/evidencias
-      - ./data/processed:/app/data/processed
+      - ./data/output:/app/data/output
+      - ./reports:/app/reports
+      - ./screenshots:/app/screenshots
     ports:
       - "8000:8000"
     command: uvicorn webapp.main:app --host 0.0.0.0 --port 8000
+
+  bot-conferencia:
+    build: .
+    container_name: bot-conferencia
+    environment:
+      - TZ=America/Manaus
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ENVIRONMENT=container
+      - WEB_AUTOMATION_URL=http://webapp:8000
+    volumes:
+      - .:/app
+      - ./dados_referencia:/app/data/raw
+      - ./logs:/app/logs
+      - ./data/output:/app/data/output
+      - ./reports:/app/reports
+      - ./screenshots:/app/screenshots
+    depends_on:
+      - webapp
+    command: python web_automation.py

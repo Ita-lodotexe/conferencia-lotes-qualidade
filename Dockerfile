@@ -1,10 +1,13 @@
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=container
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV TZ=America/Manaus
 
 WORKDIR /app
 
-# Install system deps required by Playwright and common libs
+# Install system dependencies required by Playwright and common libs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        curl ca-certificates gnupg libnss3 libatk1.0-0 libgtk-3-0 libx11-xcb1 libxcb-dri3-0 \
@@ -15,8 +18,9 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Install Playwright browsers
-RUN python -m playwright install --with-deps
+# Install Playwright Chromium and OS dependencies for Chrome in container
+RUN python -m playwright install chromium
+RUN python -m playwright install-deps chromium
 
 # Copy app
 COPY . .
