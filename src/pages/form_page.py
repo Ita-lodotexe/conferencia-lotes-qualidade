@@ -5,6 +5,7 @@ from pathlib import Path
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException
 
 
 class FormPage:
@@ -150,8 +151,15 @@ class FormPageSelenium:
         radios = self.driver.find_elements(By.CSS_SELECTOR, self.STATUS_RADIO)
         for radio in radios:
             if radio.get_attribute("value") == normalized:
-                radio.click()
-                return
+                try:
+                    radio.click()
+                except (ElementNotInteractableException, ElementClickInterceptedException):
+                    self.driver.execute_script(
+                        "arguments[0].checked = true;"
+                        "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
+                        radio,
+                    )
+        return
 
     def preencher_observacao(self, observacao: str) -> None:
         elemento = self.driver.find_element(By.CSS_SELECTOR, self.OBSERVACAO_TEXTAREA)
