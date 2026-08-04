@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import os
+import platform
 import time
 from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 from src.pages.form_page import FormPageSelenium
 from src.pages.login_page import LoginPageSelenium
@@ -22,6 +26,28 @@ URL = os.environ.get("APP_URL", DEFAULT_PAGE.as_uri())
 LOGIN_USER = os.environ.get("APP_USER", "bot_local")
 LOGIN_PASSWORD = os.environ.get("APP_PASSWORD", "senha_dev")
 HEADLESS = os.environ.get("HEADLESS", "false").lower() in ("1", "true", "yes")
+
+CAMINHO_CHROMIUM_LINUX = "/usr/bin/chromium-browser"
+
+
+def _criar_driver(options: Options) -> webdriver.Chrome:
+    if platform.system() == "Linux" and Path(CAMINHO_CHROMIUM_LINUX).exists():
+        # No Linux, quando o navegador disponível é o Chromium instalado via
+        # snap, o Chrome "puro" (webdriver.Chrome() sem configuração extra)
+        # falha com SessionNotCreatedException: DevToolsActivePort file
+        # doesn't exist. O snap isola o /tmp padrão onde o ChromeDriver
+        # tentaria ler essa porta. A correção é apontar o binário certo e
+        # usar um user-data-dir dentro da pasta pessoal, fora do sandbox
+        # do snap.
+        options.binary_location = CAMINHO_CHROMIUM_LINUX
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument(f"--user-data-dir={Path.home() / 'chromium-selenium-profile'}")
+        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+    else:
+        service = Service(ChromeDriverManager().install())
+
+    return webdriver.Chrome(service=service, options=options)
 
 
 def run() -> int:
@@ -37,7 +63,7 @@ def run() -> int:
         options.add_argument("--window-size=1280,1024")
 
     try:
-        with webdriver.Chrome(options=options) as driver:
+        with _criar_driver(options) as driver:
             login_page = LoginPageSelenium(driver)
             login_page.goto(LOGIN_URL)
             login_page.fazer_login(LOGIN_USER, LOGIN_PASSWORD)

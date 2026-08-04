@@ -100,6 +100,14 @@ def test_dry_run_nao_chama_sdk(monkeypatch, base_ref, tmp_path, caplog):
     # passaria a depender do conteúdo de data/processed/, que é gerado pelo
     # preprocessor e usa o domínio real (LG-2026-*), não o fictício abaixo.
     monkeypatch.setattr(performer, "carregar_base_referencia", lambda caminho: base_ref)
+    # main() também confere, antes de chamar carregar_base_referencia, se o
+    # arquivo existe de fato via os.path.isfile(BASE_REFERENCIA). O patch
+    # acima não cobre essa checagem, então criamos um arquivo vazio no
+    # caminho patcheado só para essa validação passar; o conteúdo real dele
+    # nunca é lido, porque carregar_base_referencia está mockada acima.
+    caminho_base_fake = tmp_path / "base_referencia_fake.csv"
+    caminho_base_fake.write_text("lote_id,status_cadastro\n", encoding="utf-8")
+    monkeypatch.setattr(performer, "BASE_REFERENCIA", str(caminho_base_fake))
 
     # L001 conforme, L002 conforme (reprovado com observação), L007 inativo -> RN03
     (tmp_path / performer.ARQUIVO_CSV).write_text(

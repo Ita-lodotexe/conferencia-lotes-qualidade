@@ -7,6 +7,8 @@ uvicorn
 python-multipart
 httpx
 playwright
+selenium
+webdriver-manager
 python-json-logger
 python-dotenv
 botcity-maestro-sdk==0.9.0
