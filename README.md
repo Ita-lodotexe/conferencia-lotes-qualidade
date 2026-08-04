@@ -189,6 +189,43 @@ relatório de divergências em `.xlsx`. É um módulo independente, em
 [webapp/](webapp/) — instruções de execução completas em
 [webapp/README.md](webapp/README.md).
 
+## Automação local com Playwright e Selenium
+
+O repositório também tem automação local de UI baseada em POM.
+
+- `playwright_fill.py`
+  - fluxo completo de login em `webapp/static/login.html`
+  - depois processa os lotes de `automation_fixtures/inspecao_real.xlsx`
+  - gera JSON de resultados em `evidencias/resultados_playwright.json`
+  - gera screenshots de evidência em `evidencias/`
+
+- `selenium_automation.py`
+  - exemplo de execução Selenium com `LoginPageSelenium`
+  - faz login e envia um lote de teste para `lote-teste.html`
+  - salva screenshot em `evidencias/selenium_form_page.png`
+  - serve como base para quem quiser ampliar para o processamento completo da planilha
+
+### Page Objects atuais
+
+O código usa objetos de página em `src/pages/`:
+
+- `LoginPage`, `FormPage`, `UploadPage` (Playwright)
+- `LoginPageSelenium`, `FormPageSelenium`, `UploadPageSelenium` (Selenium)
+
+### Variáveis de ambiente
+
+As automações suportam as variáveis:
+
+- `APP_LOGIN_URL`: endereço da página de login
+- `APP_URL`: endereço da página do formulário de lote
+- `APP_USER`: usuário de login (`bot_local` por padrão)
+- `APP_PASSWORD`: senha de login (`senha_dev` por padrão)
+- `HEADLESS`: `true`/`false` para controlar modo headless
+- `WEB_AUTOMATION_LOG_FILE`: `true` para habilitar log em `logs/automacao_web.jsonl`
+
+> Por padrão, o logger do fluxo de upload usa apenas console e não grava
+> `automacao_web.jsonl` a menos que `WEB_AUTOMATION_LOG_FILE=true` esteja definido.
+
 ## Relatório de divergências (Issue #5)
 
 `gerar_relatorio()`, em [src/relatorio.py](src/relatorio.py), aplica as
