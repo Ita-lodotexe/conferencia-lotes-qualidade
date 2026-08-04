@@ -12,6 +12,8 @@ import pandas as pd
 from playwright.sync_api import Page, sync_playwright
 from pythonjsonlogger import jsonlogger
 
+from src.pages.upload_page import UploadPage
+
 URL = os.environ.get("WEB_AUTOMATION_URL", "http://127.0.0.1:8000")
 ENGINE = "playwright"
 HEADLESS = os.environ.get("HEADLESS", "false").lower() in ("1", "true", "yes")
@@ -27,12 +29,6 @@ ARQUIVO_ORIGINAL = Path.home() / "Downloads" / "inspecao_lotes_dia.xlsx"
 ARQUIVO_INSPECAO_REAL = FIXTURES_DIR / "inspecao_real.xlsx"
 ARQUIVO_BASE_REFERENCIA = BASE_DIR / "data" / "processed" / "base_lotes_referencia.csv"
 
-INPUT_FILE_SELECTOR = "#arquivo"
-SUBMIT_BUTTON_SELECTOR = "#btn-enviar"
-RESULT_SECTION_SELECTOR = "#resultado-section:not([hidden])"
-ERROR_MESSAGE_SELECTOR = "#mensagem-erro"
-NO_DIVERGENCIAS_SELECTOR = "#sem-divergencias"
-METRICAS_SELECTOR = "#metricas"
 
 
 def configurar_logger() -> logging.Logger:
@@ -53,21 +49,25 @@ def configurar_logger() -> logging.Logger:
             record.bot_id = self.bot_id
             return True
 
+    log_to_file = os.environ.get("WEB_AUTOMATION_LOG_FILE", "false").lower() in ("1", "true", "yes")
+
     if not logger.handlers:
         fmt = jsonlogger.JsonFormatter(
             fmt="%(asctime)s %(levelname)s %(name)s %(message)s %(execution_id)s %(bot_id)s",
             timestamp=True,
         )
 
-        arquivo = logging.FileHandler(LOGS_DIR / "automacao_web.jsonl", encoding="utf-8")
-        arquivo.setFormatter(fmt)
-        arquivo.addFilter(ContextFilter(execution_id, bot_id))
-        logger.addHandler(arquivo)
-
         console = logging.StreamHandler()
         console.setFormatter(fmt)
         console.addFilter(ContextFilter(execution_id, bot_id))
         logger.addHandler(console)
+
+        if log_to_file:
+            LOGS_DIR.mkdir(exist_ok=True)
+            arquivo = logging.FileHandler(LOGS_DIR / "automacao_web.jsonl", encoding="utf-8")
+            arquivo.setFormatter(fmt)
+            arquivo.addFilter(ContextFilter(execution_id, bot_id))
+            logger.addHandler(arquivo)
 
     return logger
 
@@ -137,24 +137,19 @@ def processar_item(page: Page, item: ItemDataPool) -> dict:
     inicio = time.perf_counter()
     logger.info(f"Item '{item.nome}': iniciando ({item.descricao})")
 
-    page.goto(URL)
-    page.wait_for_load_state("domcontentloaded")
-
-    page.set_input_files(INPUT_FILE_SELECTOR, str(item.arquivo))
+    upload_page = UploadPage(page)
+    upload_page.goto(URL)
+    upload_page.upload_file(str(item.arquivo))
     logger.info(f"Item '{item.nome}': arquivo '{item.arquivo.name}' selecionado")
+    upload_page.submit()
+    upload_page.wait_for_result(timeout=DEFAULT_TIMEOUT_MS)
 
-    page.locator(SUBMIT_BUTTON_SELECTOR).click()
-
-    page.wait_for_selector(RESULT_SECTION_SELECTOR, timeout=DEFAULT_TIMEOUT_MS)
-
-    mensagem_erro = page.locator(ERROR_MESSAGE_SELECTOR)
-    if mensagem_erro.is_visible():
+    if upload_page.has_error():
         resultado_real = "erro_estrutura"
-        texto_resultado = mensagem_erro.inner_text()
+        texto_resultado = page.locator("#mensagem-erro").inner_text()
     else:
-        sem_divergencias = page.locator(NO_DIVERGENCIAS_SELECTOR)
-        resultado_real = "sem_divergencias" if sem_divergencias.is_visible() else "com_divergencias"
-        texto_resultado = page.locator(METRICAS_SELECTOR).inner_text()
+        resultado_real = "sem_divergencias" if upload_page.has_no_divergencias() else "com_divergencias"
+        texto_resultado = upload_page.get_metricas()
 
     logger.info(f"Item '{item.nome}': resultado obtido = '{resultado_real}' | {texto_resultado!r}")
 
