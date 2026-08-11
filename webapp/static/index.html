@@ -3,73 +3,75 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bot de Conferência de Lotes — Relatório de Divergências</title>
+  <title>Dashboard de Conferência de Lotes — Aula 22</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <div class="blob blob--um" aria-hidden="true"></div>
+  <div class="blob blob--dois" aria-hidden="true"></div>
+
   <header class="topbar">
     <div class="topbar__inner">
       <span class="brand-mark">LG</span>
       <div class="topbar__titles">
-        <h1>Bot de Conferência de Lotes</h1>
-        <p>Relatório de divergências de qualidade</p>
+        <h1>Dashboard de Conferência de Lotes</h1>
+        <p>Regras RN01–RN12 · Aula 22</p>
       </div>
     </div>
   </header>
 
   <main class="container">
     <section class="card upload-card" id="upload-section">
-      <h2>1. Envie o relatório original</h2>
+      <h2>1. Envie a planilha de 10 dias</h2>
       <p class="muted">
-        Formatos aceitos: <strong>.xlsx</strong> ou <strong>.csv</strong>, com as colunas
-        <code>lote_id, produto, linha, turno, status, responsavel, data, observacao</code>.
+        Formato aceito: <strong>.xlsx</strong> — 10 abas diárias
+        <code>Insp_DD_MM_AAAA</code> + a aba <code>Base_Referencia</code>.
       </p>
 
-      <form id="upload-form" aria-label="Formulário de envio de relatório">
+      <form id="upload-form">
         <label class="dropzone" id="dropzone" for="arquivo">
-          <input type="file" id="arquivo" name="arquivo" accept=".xlsx,.xls,.csv" hidden aria-label="Arquivo de relatório" />
+          <input type="file" id="arquivo" name="arquivo" accept=".xlsx,.xls" hidden />
           <span id="dropzone-texto">Clique para escolher o arquivo ou arraste aqui</span>
         </label>
         <button type="submit" class="btn btn--primary" id="btn-enviar" disabled>
-          Enviar relatório
+          Processar planilha
         </button>
       </form>
 
       <p id="mensagem-erro" class="mensagem-erro" hidden></p>
-      <p id="mensagem-carregando" class="mensagem-carregando" hidden>Processando relatório…</p>
+      <p id="mensagem-carregando" class="mensagem-carregando" hidden>Processando…</p>
     </section>
 
     <section class="card resultado-card" id="resultado-section" hidden>
-      <h2>2. Resumo do relatório</h2>
+      <h2>2. Resumo</h2>
 
-      <div class="metricas" id="metricas"></div>
-
-      <h3>Divergências encontradas</h3>
-      <div class="tabela-wrapper">
-        <table id="tabela-divergencias">
-          <thead>
-            <tr>
-              <th>Regra</th>
-              <th>Lote</th>
-              <th>Linha</th>
-              <th>Descrição</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <p id="sem-divergencias" class="muted" hidden>
-          Nenhuma divergência encontrada — todos os lotes estão conformes.
-        </p>
+      <div class="resumo-grid">
+        <div class="metricas" id="metricas"></div>
+        <div class="donut-wrapper">
+          <div class="donut" id="donut"></div>
+          <ul class="legenda" id="legenda"></ul>
+        </div>
       </div>
 
-      <button type="button" class="btn btn--secondary" id="btn-download">
-        Baixar relatório de divergências (.xlsx)
-      </button>
+      <h3>Evolução por dia</h3>
+      <p class="muted">Divergência + Ambíguo, com o total do dia como referência.</p>
+      <div class="evolucao" id="evolucao"></div>
+
+      <div class="acoes">
+        <button type="button" class="btn btn--primary" id="btn-download">
+          Baixar relatório Excel (.xlsx)
+        </button>
+        <button type="button" class="btn btn--secondary" id="btn-log">
+          Ver log de execução
+        </button>
+      </div>
+
+      <pre class="log" id="log-texto" hidden></pre>
     </section>
   </main>
 
   <footer class="footer">
-    <p>Convênio 005/2025 — INOVA · IFAM · LG Electronics do Brasil</p>
+    <p>Convênio N.º 005/2025 — INOVA · IFAM · LG Electronics do Brasil</p>
   </footer>
 
   <script src="/app.js"></script>

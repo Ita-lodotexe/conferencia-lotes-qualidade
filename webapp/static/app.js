@@ -1,3 +1,10 @@
+const CATEGORIAS = [
+  { chave: "Válido", cor: "var(--valido)", corHex: "#2f9e64" },
+  { chave: "Divergência", cor: "var(--divergencia)", corHex: "#a50034" },
+  { chave: "Ambíguo", cor: "var(--ambiguo)", corHex: "#e0954b" },
+  { chave: "Erro de Entrada", cor: "var(--erro)", corHex: "#6b6470" },
+];
+
 const form = document.getElementById("upload-form");
 const inputArquivo = document.getElementById("arquivo");
 const dropzone = document.getElementById("dropzone");
@@ -7,11 +14,14 @@ const mensagemErro = document.getElementById("mensagem-erro");
 const mensagemCarregando = document.getElementById("mensagem-carregando");
 const resultadoSection = document.getElementById("resultado-section");
 const metricasEl = document.getElementById("metricas");
-const tabelaCorpo = document.querySelector("#tabela-divergencias tbody");
-const semDivergencias = document.getElementById("sem-divergencias");
+const donutEl = document.getElementById("donut");
+const legendaEl = document.getElementById("legenda");
+const evolucaoEl = document.getElementById("evolucao");
 const btnDownload = document.getElementById("btn-download");
+const btnLog = document.getElementById("btn-log");
+const logTexto = document.getElementById("log-texto");
 
-let relatorioIdAtual = null;
+let dashboardIdAtual = null;
 
 function escapeHtml(valor) {
   const div = document.createElement("div");
@@ -51,44 +61,71 @@ dropzone.addEventListener("drop", (e) => {
   }
 });
 
-function renderMetricas(resumo) {
-  const itens = [
-    { label: "Total de lotes", valor: resumo.total_lotes },
-    { label: "Lotes conformes", valor: resumo.lotes_conformes, ok: true },
-    { label: "Lotes com divergência", valor: resumo.lotes_com_divergencia },
-    { label: "Total de divergências", valor: resumo.total_divergencias },
-  ];
+function renderMetricas(porClassificacao, percentual, total) {
+  metricasEl.innerHTML = CATEGORIAS.map((categoria) => {
+    const valor = porClassificacao[categoria.chave] || 0;
+    const pct = percentual[categoria.chave] || 0;
+    return `
+      <div class="metrica">
+        <strong style="color:${categoria.corHex}">${escapeHtml(valor)}</strong>
+        <span>${escapeHtml(categoria.chave)}</span>
+        <small>${escapeHtml(pct)}%</small>
+      </div>`;
+  }).join("");
 
-  metricasEl.innerHTML = itens
-    .map(
-      (item) => `
-      <div class="metrica${item.ok ? " metrica--ok" : ""}">
-        <strong>${escapeHtml(item.valor)}</strong>
-        <span>${escapeHtml(item.label)}</span>
-      </div>`
-    )
-    .join("");
+  legendaEl.innerHTML = CATEGORIAS.map(
+    (categoria) => `
+      <li>
+        <span class="ponto" style="background:${categoria.corHex}"></span>
+        ${escapeHtml(categoria.chave)}
+      </li>`
+  ).join("");
 }
 
-function renderDivergencias(divergencias) {
-  tabelaCorpo.innerHTML = "";
+function renderDonut(porClassificacao, total) {
+  donutEl.setAttribute("data-total", total);
 
-  if (!divergencias.length) {
-    semDivergencias.hidden = false;
+  if (!total) {
+    donutEl.style.background = "var(--lg-rose-softer)";
     return;
   }
-  semDivergencias.hidden = true;
 
-  divergencias.forEach((d) => {
-    const linha = document.createElement("tr");
-    linha.innerHTML = `
-      <td>${escapeHtml(d.regra)}</td>
-      <td>${escapeHtml(d.lote_id ?? "—")}</td>
-      <td>${escapeHtml(d.linha ?? "—")}</td>
-      <td>${escapeHtml(d.descricao)}</td>
-    `;
-    tabelaCorpo.appendChild(linha);
-  });
+  let acumulado = 0;
+  const fatias = CATEGORIAS.map((categoria) => {
+    const valor = porClassificacao[categoria.chave] || 0;
+    const inicio = (acumulado / total) * 360;
+    acumulado += valor;
+    const fim = (acumulado / total) * 360;
+    return `${categoria.corHex} ${inicio}deg ${fim}deg`;
+  }).join(", ");
+
+  donutEl.style.background = `conic-gradient(${fatias})`;
+}
+
+function renderEvolucao(evolucaoPorDia) {
+  if (!evolucaoPorDia.length) {
+    evolucaoEl.innerHTML = "";
+    return;
+  }
+
+  const maiorTotal = Math.max(...evolucaoPorDia.map((d) => d.total), 1);
+
+  evolucaoEl.innerHTML = evolucaoPorDia
+    .map((dia) => {
+      const problemas = (dia["Divergência"] || 0) + (dia["Ambíguo"] || 0);
+      const alturaTotal = Math.round((dia.total / maiorTotal) * 100);
+      const alturaProblemas = Math.round((problemas / maiorTotal) * 100);
+      const rotulo = (dia.dia || "").replace(/^Insp_/, "").replace(/_/g, "/");
+      return `
+        <div class="evolucao-dia">
+          <div class="evolucao-barras" title="${escapeHtml(dia.dia)}: total ${dia.total}, problemas ${problemas}">
+            <div class="evolucao-barra-total" style="height:${alturaTotal}%"></div>
+            <div class="evolucao-barra-problema" style="height:${alturaProblemas}%"></div>
+          </div>
+          <span>${escapeHtml(rotulo)}</span>
+        </div>`;
+    })
+    .join("");
 }
 
 form.addEventListener("submit", async (e) => {
@@ -106,34 +143,24 @@ form.addEventListener("submit", async (e) => {
   btnEnviar.disabled = true;
   mensagemCarregando.hidden = false;
   resultadoSection.hidden = true;
+  logTexto.hidden = true;
 
   try {
-    const resposta = await fetch("/api/relatorios", {
+    const resposta = await fetch("/api/aula22/dashboard", {
       method: "POST",
       body: dadosFormulario,
     });
 
-    const texto = await resposta.text();
-    let dados;
-    const contentType = resposta.headers.get("content-type") || "";
-
-    if (contentType.includes("application/json")) {
-      dados = JSON.parse(texto);
-    } else if (texto) {
-      try {
-        dados = JSON.parse(texto);
-      } catch {
-        throw new Error(`Resposta inválida do servidor: ${texto}`);
-      }
-    }
+    const dados = await resposta.json();
 
     if (!resposta.ok) {
-      throw new Error(dados?.detail || texto || "Não foi possível gerar o relatório.");
+      throw new Error(dados.detail || "Não foi possível processar a planilha.");
     }
 
-    relatorioIdAtual = dados.id;
-    renderMetricas(dados.resumo);
-    renderDivergencias(dados.divergencias);
+    dashboardIdAtual = dados.id;
+    renderMetricas(dados.por_classificacao, dados.percentual, dados.total);
+    renderDonut(dados.por_classificacao, dados.total);
+    renderEvolucao(dados.evolucao_por_dia);
     resultadoSection.hidden = false;
   } catch (erro) {
     mostrarErro(erro.message);
@@ -144,8 +171,18 @@ form.addEventListener("submit", async (e) => {
 });
 
 btnDownload.addEventListener("click", () => {
-  if (!relatorioIdAtual) {
+  if (!dashboardIdAtual) {
     return;
   }
-  window.location.href = `/api/relatorios/${relatorioIdAtual}/download`;
+  window.location.href = `/api/aula22/dashboard/${dashboardIdAtual}/download`;
+});
+
+btnLog.addEventListener("click", async () => {
+  if (!dashboardIdAtual) {
+    return;
+  }
+  const resposta = await fetch(`/api/aula22/dashboard/${dashboardIdAtual}/log`);
+  const texto = await resposta.text();
+  logTexto.textContent = texto;
+  logTexto.hidden = false;
 });

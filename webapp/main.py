@@ -1,89 +1,120 @@
 """
-Interface web do Bot de Conferência de Lotes (Issue de UI web).
+Interface web do projeto (Aula 22 — Dashboard Excel e Relatórios).
 
-Módulo independente: expõe uma API (FastAPI) que recebe o relatório
-original, roda `gerar_relatorio()` (src/relatorio.py) e devolve o resumo
-em JSON + o .xlsx de divergências para download. Serve também a página
-única (HTML/CSS/JS) em `webapp/static/`.
-
-Convênio 005/2025 (INOVA, IFAM, LG Electronics do Brasil).
+Recebe o upload de `inspecao_lotes_10dias.xlsx`, roda o mesmo pipeline
+do README (carregar_planilha_10dias -> classificar_lotes ->
+gerar_relatorio_aula22), expõe o resultado por API e serve o frontend
+(upload + preview + download) em webapp/static/.
 """
 
 from __future__ import annotations
 
-import io
 import tempfile
 import uuid
 from pathlib import Path
 
-import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.relatorio import gerar_relatorio
+from src.aula22_classificacao import classificar_lotes
+from src.aula22_preprocessador import carregar_planilha_10dias
+from src.aula22_relatorio import gerar_relatorio_aula22
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-EXTENSOES_ACEITAS = (".xlsx", ".xls", ".csv")
 
-app = FastAPI(title="Bot de Conferência de Lotes")
+app = FastAPI(title="Conferência de Lotes — Dashboard Aula 22")
 
-_relatorios_gerados: dict[str, Path] = {}
+EXTENSOES_ACEITAS = (".xlsx", ".xls")
+
+# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str}
+_dashboards_gerados: dict[str, dict] = {}
 
 
-def _ler_planilha(nome_arquivo: str, conteudo: bytes) -> pd.DataFrame:
+def _classificar_upload(nome_arquivo: str, conteudo: bytes) -> list:
+    """Salva o upload num arquivo temporário e roda o pipeline de classificação.
+
+    carregar_planilha_10dias lê de um caminho em disco (via
+    pd.ExcelFile), não de bytes em memória — por isso o passo
+    intermediário de escrever num arquivo temporário, que é descartado
+    logo depois de lido (só o .xlsx de saída precisa persistir, para o
+    download).
+    """
     nome = (nome_arquivo or "").lower()
-    buffer = io.BytesIO(conteudo)
-
     if not nome.endswith(EXTENSOES_ACEITAS):
         raise HTTPException(
             status_code=400,
-            detail="Formato não suportado. Envie um arquivo .xlsx ou .csv.",
+            detail="Formato não suportado. Envie um arquivo .xlsx ou .xls.",
         )
 
-    try:
-        if nome.endswith(".csv"):
-            return pd.read_csv(buffer)
-        return pd.read_excel(buffer)
-    except Exception as erro:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Não foi possível ler o arquivo enviado: {erro}",
-        ) from erro
+    with tempfile.NamedTemporaryFile(suffix=".xlsx") as arquivo_temporario:
+        arquivo_temporario.write(conteudo)
+        arquivo_temporario.flush()
+
+        try:
+            registros_por_dia, base_referencia = carregar_planilha_10dias(arquivo_temporario.name)
+        except ValueError as erro:
+            raise HTTPException(status_code=400, detail=str(erro)) from erro
+        except Exception as erro:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível ler o arquivo enviado: {erro}",
+            ) from erro
+
+    return classificar_lotes(registros_por_dia, base_referencia)
 
 
-@app.post("/api/relatorios")
-async def criar_relatorio(arquivo: UploadFile = File(...)) -> dict:
+@app.post("/api/aula22/dashboard")
+async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
     conteudo = await arquivo.read()
-    planilha = _ler_planilha(arquivo.filename or "", conteudo)
+    registros = _classificar_upload(arquivo.filename or "", conteudo)
 
-    if planilha.empty:
-        raise HTTPException(status_code=400, detail="A planilha enviada está vazia.")
+    if not registros:
+        raise HTTPException(status_code=400, detail="Nenhum registro encontrado na planilha enviada.")
 
-    relatorio_id = uuid.uuid4().hex
-    caminho_saida = Path(tempfile.gettempdir()) / f"relatorio_divergencias_{relatorio_id}.xlsx"
+    dashboard_id = uuid.uuid4().hex
+    caminho_saida = Path(tempfile.gettempdir()) / f"relatorio_conferencia_lotes_{dashboard_id}.xlsx"
 
-    resultado = gerar_relatorio(planilha, str(caminho_saida))
-    _relatorios_gerados[relatorio_id] = caminho_saida
+    resultado = gerar_relatorio_aula22(registros, str(caminho_saida))
+
+    resumo = resultado["resumo"]
+    evolucao_por_dia = [{"dia": dia, **valores} for dia, valores in resumo["evolucao_por_dia"].items()]
+
+    _dashboards_gerados[dashboard_id] = {
+        "arquivo": caminho_saida,
+        "resumo": resumo,
+        "log": resultado["log"],
+    }
 
     return {
-        "id": relatorio_id,
-        "resumo": resultado["resumo"],
-        "divergencias": resultado["divergencias"],
+        "id": dashboard_id,
+        "total": resumo["total"],
+        "por_classificacao": resumo["por_classificacao"],
+        "percentual": resumo["percentual"],
+        "evolucao_por_dia": evolucao_por_dia,
     }
 
 
-@app.get("/api/relatorios/{relatorio_id}/download")
-def baixar_relatorio(relatorio_id: str) -> FileResponse:
-    caminho = _relatorios_gerados.get(relatorio_id)
-    if caminho is None or not caminho.exists():
+@app.get("/api/aula22/dashboard/{dashboard_id}/download")
+def baixar_dashboard(dashboard_id: str) -> FileResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None or not dados["arquivo"].exists():
         raise HTTPException(status_code=404, detail="Relatório não encontrado.")
 
     return FileResponse(
-        caminho,
+        dados["arquivo"],
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="relatorio_divergencias.xlsx",
+        filename="relatorio_conferencia_lotes.xlsx",
     )
+
+
+@app.get("/api/aula22/dashboard/{dashboard_id}/log")
+def obter_log(dashboard_id: str) -> PlainTextResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None:
+        raise HTTPException(status_code=404, detail="Relatório não encontrado.")
+
+    return PlainTextResponse(dados["log"])
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

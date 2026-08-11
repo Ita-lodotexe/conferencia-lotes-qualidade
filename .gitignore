@@ -216,13 +216,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Local fixtures used for automated tests
-automation_fixtures/
-
-# Local evidence and generated output
-# these files are produced at runtime and should not be committed
-evidencias/
-
-# Bot — logs de execução
-logs/

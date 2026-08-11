@@ -1,360 +1,269 @@
 # conferencia-lotes-qualidade
 
-## Preparando o dado real (issue #26)
+Bot de conferência de lotes de qualidade — Convênio N.º 005/2025 (INOVA |
+IFAM | LG Electronics do Brasil Ltda.), Polo Industrial de Manaus.
 
-A planilha oficial do exercício fica em
-`dados_referencia/inspecao_lotes_dia.xlsx`. Ela tem formato humano (3 abas,
-títulos, rodapé, legenda de cores, nota do revisor) e por isso não é
-consumida diretamente pelo bot: um preprocessor traduz o formato humano
-para os CSVs que o restante do fluxo já sabe ler.
+## O problema que este projeto resolve
 
-```bash
-python -m scripts.planilha_para_csv
-```
+Todos os dias, uma planilha de inspeção registra o resultado da
+conferência de lotes de produção (aprovado, reprovado, pendente...).
+Alguém precisa olhar essa planilha e decidir três coisas:
 
-Isso gera dois arquivos:
+1. **O que está errado na própria planilha?** (campo vazio, data
+   malformada — "Erro de Entrada")
+2. **O que não bate com o cadastro da empresa?** (lote que não existe
+   na base de referência, ou duplicado no mesmo dia — "Divergência")
+3. **O que precisa de uma pessoa decidir?** (um status que o sistema
+   não reconhece — "Ambíguo")
 
-| Saída | Origem | Conteúdo | Consumido por |
-|---|---|---|---|
-| `dados_entrada/lotes_auditoria.csv` | aba `Inspecao_14_06_2026` | 25 lotes | Dispatcher (fila) e Performer (dry-run) |
-| `data/processed/base_lotes_referencia.csv` | aba `Base_Referencia` | 23 lotes cadastrados | Performer (RN03) |
+Fazer isso manualmente, todo dia, é lento e sujeito a erro. Este
+projeto lê a planilha, aplica um conjunto de regras (RN01 a RN12) e
+classifica **cada linha** em uma de quatro categorias — **Válido**,
+**Divergência**, **Ambíguo** ou **Erro de Entrada** — produzindo um
+relatório em `.xlsx` com um dashboard (indicadores, gráfico de rosca e
+gráfico de evolução por dia) para quem só quer abrir o Excel e entender
+a situação em 30 segundos, sem olhar código nenhum.
 
-O preprocessor corta as linhas de lixo (rodapé `Total de registros`,
-legenda de cores, nota do revisor) por limite de posição, e normaliza
-células vazias do Excel para string vazia — evitando que `NaN` do pandas
-chegue ao DataPool do Maestro, onde não é JSON válido.
+## Pré-requisitos e instalação
 
-**Fluxo operacional completo:**
-
-```bash
-python -m scripts.planilha_para_csv   # 1. planilha oficial -> CSVs
-python -m scripts.dispatcher          # 2. CSV -> fila no Maestro
-python -m src.bot.performer           # 3. fila -> validação RN01-RN07
-```
-
-> ⚠️ **Divergência conhecida entre a planilha e o resultado do bot.** A
-> planilha marca visualmente 8 lotes como divergentes entre os 25; o bot
-> detecta 7. A diferença é a linha 18 (`LG-2026-00115`), cuja coluna
-> `data` traz `15-06-2026` em vez de `14/06/2026` — separador e dia
-> diferentes do resto. Validar *formato* e *coerência* de data não é
-> nenhuma das regras RN01–RN07 do PDD: a `data` só é verificada quanto a
-> estar preenchida (RN02), e `15-06-2026` está preenchida. Portanto o bot
-> classificar esse lote como conforme é o resultado **correto dado o
-> escopo do PDD** — não um bug. Cobrir esse caso exigiria uma regra nova,
-> fora do escopo desta issue.
-
-## Camada BotCity (v0.2.1)
-
-Fundação de execução do bot como robô BotCity: configuração via `.env`,
-logging em arquivo e validação fail-fast de pré-requisitos, em `src/bot/`.
-
-> **v0.2.1:** o bot passou a operar sobre o dado real do exercício (a
-> planilha oficial da LG), via o preprocessor descrito na seção acima. Até
-> a v0.2.0 o fluxo rodava sobre um CSV fictício escrito à mão.
-
-**Configuração:**
+Você precisa de Python 3.11 ou superior.
 
 ```bash
-cp .env.example .env
-# preencha BOTCITY_WORKSPACE, BOTCITY_SERVER, BOTCITY_LOGIN e BOTCITY_KEY
-# com os valores do painel do BotCity Maestro
-# (https://developers.botcity.dev/app/ → Ambiente do desenvolvedor)
+git clone <url-do-repositorio>
+cd conferencia-lotes-qualidade
+python -m venv .venv
+source .venv/bin/activate          # no Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-**Rodando o bot localmente:**
+Isso instala `pandas` e `openpyxl` (leitura/escrita de planilhas e
+gráficos nativos do Excel), `fastapi`/`uvicorn`/`python-multipart`/`httpx`
+(interface web, em construção), `pytest` (testes) e `dvc` (versionamento
+de dados, opcional).
+
+## Como rodar os testes
 
 ```bash
-python -m src.bot.main
+python -m pytest tests/ -v
 ```
 
-Os logs de execução são gravados em `logs/execucao.log` (e também exibidos
-no terminal).
+Isso roda a suíte inteira usando dados **sintéticos** (inventados só
+para o teste) — você não precisa de nenhum arquivo externo para ver os
+testes passando. Três testes específicos (em
+`tests/test_contra_gabarito.py`) são pulados automaticamente se o
+dataset real de avaliação não estiver presente — veja a seção
+["O dataset real e o gabarito"](#o-dataset-real-e-o-gabarito) abaixo.
 
-> **Nota:** esta versão entrega a fundação (config, logs, validação
-> fail-fast da pasta de entrada), o cofre de credenciais e o Dispatcher
-> da fila (seções abaixo).
+## Como rodar o pipeline com uma planilha de verdade
 
-## Cofre de credenciais
+Hoje (antes da interface web ficar pronta — ver
+["Interface web"](#interface-web-em-construção) no fim deste documento)
+o jeito de processar uma planilha é chamar as três funções em sequência
+num script Python. Crie um arquivo, por exemplo `executar.py`, na raiz
+do projeto:
 
-`src/bot/vault_client.py` expõe `obter_credencial_erp() -> (usuario, senha)`,
-usada para autenticar no ERP sem nenhuma senha hardcoded no código.
+```python
+from src.aula22_preprocessador import carregar_planilha_10dias
+from src.aula22_classificacao import classificar_lotes
+from src.aula22_relatorio import gerar_relatorio_aula22
 
-A flag `VAULT_ENABLED` (no `.env`) alterna o comportamento:
+# 1. Lê as 10 abas diárias + a aba Base_Referencia do arquivo de entrada
+registros_por_dia, base_referencia = carregar_planilha_10dias(
+    "dados_referencia/inspecao_lotes_10dias.xlsx"
+)
 
-- **`VAULT_ENABLED=false`** (padrão, modo local/desenvolvimento): retorna
-  uma credencial fictícia (`"bot_local"` / `"senha_dev"`) sem tocar no SDK
-  do BotCity — não precisa nem de rede nem de credenciais reais para
-  desenvolver.
-- **`VAULT_ENABLED=true`**: faz login no BotCity Maestro
-  (`BOTCITY_SERVER` + `BOTCITY_LOGIN` + `BOTCITY_KEY`, configurados no
-  `.env`, nunca commitados) e busca a credencial real
-  `credencial_erp_eqp04` (chaves `usuario`/`senha`) no Credentials Vault
-  do workspace.
+# 2. Aplica as regras RN01-RN12 em cada registro, linha por linha
+registros = classificar_lotes(registros_por_dia, base_referencia)
 
-**A senha nunca é logada em nenhum modo**, incluindo o caminho de erro: se
-o Vault ou o SDK falharem, o `vault_client` loga só o *tipo* da exceção
-(nunca `str(exception)`, que poderia ecoar conteúdo sensível do servidor)
-e relança uma `VaultError` genérica — quem chama a função nunca vê a
-exceção original do SDK, só uma mensagem apontando para checar
-`BOTCITY_SERVER`/`BOTCITY_LOGIN`/`BOTCITY_KEY`.
+# 3. Gera o relatório final: 6 abas + dashboard nativo do Excel
+resultado = gerar_relatorio_aula22(registros, "relatorio_conferencia_lotes.xlsx")
 
-## Dispatcher (Issue #19)
+print(resultado["resumo"])   # totais e percentuais por classificação
+print(resultado["log"])      # log de execução (data/hora, totais, dias processados)
+```
 
-`scripts/dispatcher.py` lê `dados_entrada/lotes_auditoria.csv` e envia cada
-linha como um item (`DataPoolEntry`) para o DataPool
-`FilaAuditoriaLotes-Eqp04` no BotCity Maestro, usando o `BotMaestroSDK`.
-
-**Como rodar:**
+E execute:
 
 ```bash
-python -m scripts.dispatcher
+python executar.py
 ```
 
-**Requisitos:** `.env` com `MAESTRO_ENABLED=true` e credenciais válidas
-(`BOTCITY_SERVER`, `BOTCITY_LOGIN`, `BOTCITY_KEY`). Com
-`MAESTRO_ENABLED=false` (padrão), o Dispatcher roda em modo dry-run: lê o
-CSV, loga cada item que seria enviado, mas não contata o Maestro.
+Ao final, `relatorio_conferencia_lotes.xlsx` estará na raiz do projeto,
+pronto para abrir no Excel.
 
-O CSV de entrada fica em `dados_entrada/lotes_auditoria.csv` e é **gerado
-pelo preprocessor** a partir da planilha oficial — veja
-[Preparando o dado real](#preparando-o-dado-real-issue-26). Ele traz os 25
-lotes do exercício, incluindo os erros propositais (lote_id vazio,
-`responsavel` vazio, status ambíguo, reprovado sem observação, lote fora da
-base de referência).
+## Estrutura do projeto
 
-> ⚠️ **O envio não é idempotente**: rodar o Dispatcher duas vezes acumula
-> itens duplicados na fila — o script não verifica se um lote já foi
-> enviado antes. O log de início de execução avisa sobre isso.
-> Falha ao enviar um item individual não aborta o restante do lote (o
-> Dispatcher segue para o próximo e reporta o total de falhas no fim).
+```
+src/
+  modules/                    # regras de base (RN01-RN07), reaproveitadas pela Aula 22
+    validacao.py              # RN01 (estrutura) e RN02 (campos obrigatórios)
+    verificacao_lotes.py      # RN03 (existência/status do lote na base de referência)
+    normalizacao_status.py    # RN04/RN05 (status permitido e normalização OK/NOK)
+    observacao.py             # RN07 (observação obrigatória em lote reprovado)
+  aula22_preprocessador.py    # lê a planilha de 10 dias e organiza os registros por dia
+  aula22_classificacao.py     # motor de classificação: aplica RN01-RN12 e decide a categoria
+  aula22_relatorio.py         # gera o .xlsx de 6 abas + dashboard nativo
 
-Logs de execução em `logs/execucao.log` (mesmo arquivo usado pelo restante
-do bot). Testes em [tests/test_dispatcher.py](tests/test_dispatcher.py).
+tests/                        # um arquivo de teste por módulo acima, mais os testes de
+                               # integração contra o gabarito real (test_contra_gabarito.py)
 
-## Performer (Issue #21)
+webapp/                       # interface web (FastAPI) — em construção, ver seção final
 
-`src/bot/performer.py` é o outro lado do Dispatcher: consome os itens do
-DataPool `FilaAuditoriaLotes-Eqp04`, aplica RN01–RN07 em cada lote e
-publica o resultado no Maestro.
-
-**Como rodar:**
-
-```bash
-python -m src.bot.performer
+data/processed/               # base de referência em CSV, usada por alguns testes
+dados_referencia/              # (crie esta pasta) coloque aqui o dataset real de 10 dias
+docs/                         # relatórios de levantamento do estado do projeto (histórico)
 ```
 
-**O que ele faz, em ordem:** autentica no Maestro → cria uma
-`AutomationTask` real → puxa item por item da fila
-(`report_done` quando o lote está conforme, `report_error` quando não) →
-escreve o resumo em JSON e o anexa à task via `post_artifact` →
-encerra a task com `finish_task`.
+### Por que `src/modules/` e `src/aula22_*.py` são coisas separadas
 
-**Requisitos:** `.env` com credenciais válidas, `BOTCITY_ACTIVITY_LABEL`
-apontando para uma **Automation já cadastrada no painel** do Maestro, e a
-fila previamente populada pelo [Dispatcher](#dispatcher-issue-19).
-A `activity_label` não é opcional: artefatos e alertas só podem ser
-anexados a uma task existente — o servidor rejeita identificadores
-inventados com `404`.
+`src/modules/` já existia antes desta atividade e implementa as regras
+que **não mudam** de uma planilha de 1 dia para uma de 10 dias:
+existência do lote na base de referência, normalização de status
+(`OK`→`APROVADO`, `NOK`→`REPROVADO`) e observação obrigatória em
+reprovado. Os módulos `aula22_*.py` **reaproveitam essas funções sem
+alterá-las** e só implementam o que é novo desta atividade: a dataclass
+`RegistroValidado`, a deduplicação por dia (RN11) e a validação de
+formato de data (RN12). Isso evita duplicar lógica e mantém as duas
+frentes de trabalho isoladas uma da outra.
 
-**Modo dry-run:** com `MAESTRO_ENABLED=false`, o Performer lê
-`dados_entrada/lotes_auditoria.csv` direto do disco e aplica as mesmas
-regras, sem criar task, consumir fila ou postar artefato. É o modo
-recomendado para desenvolvimento.
+## As regras de negócio — RN01 a RN12
 
-**Classificação de erros na fila:** divergências de regra de negócio
-(RN02–RN07) marcam o item com `ErrorType.BUSINESS`; exceções inesperadas
-marcam com `ErrorType.SYSTEM`. Em nenhum dos casos o loop é interrompido —
-um item problemático nunca impede o processamento dos seguintes.
+Cada linha da planilha passa pelas regras **nesta ordem exata**. A
+primeira regra que "pegar" decide a classificação final da linha — por
+isso a ordem importa (ex.: um lote com campo vazio *e* status ambíguo
+é classificado pelo campo vazio, não pelo status).
 
-**Base de referência (RN03):** usa exclusivamente
-`data/processed/base_lotes_referencia.csv`, gerado pelo preprocessor. Não
-há mais fallback: se o arquivo não existir, o Performer falha com uma
-mensagem instruindo a rodar `python -m scripts.planilha_para_csv` primeiro.
-A ordem preprocessor → performer é explícita, em vez de resolvida por um
-fallback silencioso.
+| # | Regra | Verifica | Se falhar, classificação |
+|---|-------|----------|---------------------------|
+| 1 | **RN01–RN04** | `lote_id`, `produto`, `linha`, `status` ou `responsavel` vazio | **Erro de Entrada** |
+| 2 | **RN12** | `data` ausente ou fora do formato `DD/MM/AAAA` | **Erro de Entrada** |
+| 3 | **RN11** | `lote_id` repetido no mesmo dia (a partir da 2ª vez) | **Divergência** |
+| 4 | **RN05** | `lote_id` não existe (ou está inativo) na `Base_Referencia` | **Divergência** |
+| 5 | **RN06/RN07** | normaliza o status (`OK`→`APROVADO`, `NOK`→`REPROVADO`) — não gera divergência, só prepara o valor pra próxima regra | — |
+| 6 | **RN09** | status, já normalizado, não é `APROVADO`/`REPROVADO`/`PENDENTE` (ex.: `"EM AJUSTE"`) | **Ambíguo** |
+| 7 | **RN10** | status normalizado é `REPROVADO` e a `observacao` está vazia | **Divergência** |
+| 8 | (nenhuma das anteriores) | — | **Válido** (RN08) |
 
-**Onde ver o resultado:** no painel do Maestro, na task finalizada pela
-execução — o resumo em JSON fica na aba de artefatos dessa task, e o
-status final (`SUCCESS` ou `PARTIALLY_COMPLETED`) reflete se houve
-divergências. Os logs locais ficam em `logs/execucao.log`.
+Dois detalhes importantes, confirmados no código e nos testes
+(`tests/test_aula22_classificacao.py`):
 
-Testes em [tests/test_performer.py](tests/test_performer.py) e
-[tests/test_avaliar_lote.py](tests/test_avaliar_lote.py).
+- **RN11 é por dia, nunca entre dias diferentes.** O mesmo `lote_id`
+  aparecendo em duas abas diárias diferentes não é duplicidade — é
+  esperado que o mesmo lote passe por inspeções em dias distintos.
+- **`lote_id` vazio nunca conta como duplicidade.** Se a linha já não
+  tem `lote_id`, ela já cai em Erro de Entrada (regra 1) antes de a
+  RN11 ser avaliada.
+
+### Onde cada regra está implementada
+
+```python
+from src.aula22_classificacao import classificar_registro
+
+# campos obrigatórios que a Aula 22 exige (5, não os 7 do fluxo antigo):
+from src.aula22_classificacao import CAMPOS_OBRIGATORIOS_LOTE
+print(CAMPOS_OBRIGATORIOS_LOTE)
+# ['lote_id', 'produto', 'linha', 'status', 'responsavel']
+```
+
+- RN01–RN04 (campos obrigatórios): `validar_campos_obrigatorios_lote()`
+  em `src/aula22_classificacao.py`.
+- RN05 (existência/status na base): `verificar_existencia_lote()` e
+  `verificar_status_lote()`, reaproveitadas de
+  `src/modules/verificacao_lotes.py`.
+- RN06/RN07 (normalização) e RN09 (ambíguo): `validar_status()`,
+  reaproveitada de `src/modules/normalizacao_status.py`.
+- RN10 (observação em reprovado): `lote_conforme_rn07()`, reaproveitada
+  de `src/modules/observacao.py` — sim, o nome da função ainda diz
+  "rn07" porque é a mesma lógica da regra RN07 do fluxo antigo, só que
+  na Aula 22 essa regra passou a se chamar RN10.
+- RN11 (duplicidade por dia): `_contar_ocorrencias_por_dia()`, nova.
+- RN12 (formato de data): `validar_data_referencia()`, nova.
+- A orquestração de tudo isso, na ordem certa, é a função
+  `classificar_registro()` — é ela que você chamaria se quisesse
+  classificar uma única linha manualmente, mas o uso normal é via
+  `classificar_lotes()`, que já processa todos os dias de uma vez.
+
+## O relatório gerado
+
+`gerar_relatorio_aula22()` (em `src/aula22_relatorio.py`) produz um
+`.xlsx` com exatamente 6 abas, nesta ordem:
+
+1. **Resumo** — a única aba que quem for usar o relatório no dia a dia
+   realmente precisa olhar. Tem os indicadores numéricos (total e % de
+   cada categoria), um **gráfico de rosca** com a distribuição
+   percentual e um **gráfico de linha** com a evolução de
+   Divergência+Ambíguo por dia (mais o total do dia, como referência).
+   Ambos os gráficos são objetos **nativos do Excel**
+   (`openpyxl.chart.DoughnutChart`/`LineChart`), não imagens coladas —
+   dá pra clicar e editar dentro do próprio Excel.
+2. **Todos** — todos os registros processados, sem filtro.
+3. **Válidos**, **Divergências**, **Ambíguos**, **Erros de Entrada** —
+   uma aba por categoria, cada uma contendo **só** a sua classificação
+   (isso é verificado por teste: nenhuma aba pode misturar categorias
+   diferentes).
+
+## O dataset real e o gabarito
+
+O arquivo `inspecao_lotes_10dias.xlsx` (10 abas diárias
+`Insp_DD_MM_AAAA` + uma aba `Base_Referencia`) é o dado de avaliação
+desta atividade e **não é distribuído neste repositório**. Se você tiver
+esse arquivo (com a aba extra `Gabarito_Instrutor` do instrutor), coloque-o em:
+
+```
+dados_referencia/inspecao_lotes_10dias.xlsx
+```
+
+Com o arquivo nesse caminho, `python -m pytest tests/ -v` deixa de pular
+os 3 testes de `tests/test_contra_gabarito.py` e passa a validar de
+ponta a ponta: 250 registros totais, 100 divergências propositais, e a
+distribuição exata por dia (5 Divergência + 2 Ambíguo + 3 Erro de
+Entrada, todos os dias). Sem o arquivo, esses 3 testes continuam
+aparecendo como `SKIPPED` — isso é esperado, não é falha.
 
 ## Interface web
 
-O bot pode ser operado por uma página única no navegador: upload do
-relatório original, resumo das divergências direto na tela e download do
-relatório de divergências em `.xlsx`. É um módulo independente, em
-[webapp/](webapp/) — instruções de execução completas em
-[webapp/README.md](webapp/README.md).
+`webapp/main.py` expõe a API (FastAPI) e serve o frontend
+(`webapp/static/`) — upload, preview do resumo com gráfico de rosca e
+evolução por dia, e botão de download do `.xlsx`.
 
-## Automação local com Playwright e Selenium
-
-O repositório também tem automação local de UI baseada em POM.
-
-- `playwright_fill.py`
-  - fluxo completo de login em `webapp/static/login.html`
-  - depois processa os lotes de `automation_fixtures/inspecao_real.xlsx`
-  - gera JSON de resultados em `evidencias/resultados_playwright.json`
-  - gera screenshots de evidência em `evidencias/`
-
-- `selenium_automation.py`
-  - exemplo de execução Selenium com `LoginPageSelenium`
-  - faz login e envia um lote de teste para `lote-teste.html`
-  - salva screenshot em `evidencias/selenium_form_page.png`
-  - serve como base para quem quiser ampliar para o processamento completo da planilha
-
-### Page Objects atuais
-
-O código usa objetos de página em `src/pages/`:
-
-- `LoginPage`, `FormPage`, `UploadPage` (Playwright)
-- `LoginPageSelenium`, `FormPageSelenium`, `UploadPageSelenium` (Selenium)
-
-### Variáveis de ambiente
-
-As automações suportam as variáveis:
-
-- `APP_LOGIN_URL`: endereço da página de login
-- `APP_URL`: endereço da página do formulário de lote
-- `APP_USER`: usuário de login (`bot_local` por padrão)
-- `APP_PASSWORD`: senha de login (`senha_dev` por padrão)
-- `HEADLESS`: `true`/`false` para controlar modo headless
-- `WEB_AUTOMATION_LOG_FILE`: `true` para habilitar log em `logs/automacao_web.jsonl`
-
-> Por padrão, o logger do fluxo de upload usa apenas console e não grava
-> `automacao_web.jsonl` a menos que `WEB_AUTOMATION_LOG_FILE=true` esteja definido.
-
-## Relatório de divergências (Issue #5)
-
-`gerar_relatorio()`, em [src/relatorio.py](src/relatorio.py), aplica as
-regras RN01–RN07 sobre a planilha de lotes e monta o `.xlsx` de
-divergências (abas `Resumo` e `Divergencias`). É a função consumida pela
-interface web acima.
-
-```python
-import pandas as pd
-from src.relatorio import gerar_relatorio
-
-df = pd.read_csv("data/processed/dados_relatorio.csv")
-resultado = gerar_relatorio(df, "relatorio_divergencias.xlsx")
-print(resultado["resumo"])
-```
-
-Testes em [tests/test_relatorio.py](tests/test_relatorio.py).
-
-## RN07 - Observação obrigatória em lote reprovado
-
-Um lote com status `REPROVADO` (ou `NOK`) obrigatoriamente precisa ter o
-campo de observação preenchido. Se o lote estiver reprovado e a observação
-estiver vazia (ou só com espaços em branco), isso é uma divergência que o
-bot deve sinalizar. A validação trata variações de caixa no status (ex.:
-`"reprovado"`, `"REPROVADO"`, `"NOK"`).
-
-A regra está implementada em [src/observacao.py](src/observacao.py), na
-função `lote_conforme_rn07`.
-
-### Como validar um lote
-
-```python
-from src.observacao import lote_conforme_rn07
-
-lote = {"status": "REPROVADO", "observacao": ""}
-
-if not lote_conforme_rn07(lote):
-    print("Divergência RN07: lote reprovado sem observação preenchida.")
-```
-
-### Como rodar os testes
+Para subir o servidor:
 
 ```bash
-pip install pytest
-python3 -m pytest tests/ -v
+python -m uvicorn webapp.main:app --reload
 ```
 
-## RN03 — Existência do lote
-
-**Regra:** o `lote_id` do relatório deve existir na aba `Base_Referencia` da planilha de referência.
-
-**Implementação:** `validacao_lotes.py`
-
-- Ao importar o módulo, a base de referência é carregada de `data/processed/base_lotes_referencia.csv`. Se o arquivo não existir ou não puder ser lido, o programa encerra com `sys.exit()`.
-- `verificar_existencia_lote(lote)` → `True`/`False`, implementa a RN03 diretamente.
-- `verificar_status_lote(lote)` → `True` (existe e está ativo), `False` (existe mas não está ativo) ou `None` (não existe — RN03 falhou antes de chegar no status).
-
-`tests/test_validacao_lotes.py` cobre 100% do módulo, incluindo falha de leitura do CSV e casos de borda (lote duplicado, entrada `None`, coluna ausente).
-
-> ⚠️ Duplicidade de `lote_id` na base de referência quebra `verificar_status_lote` (`.item()` exige valor único). A RN03 garante existência, não unicidade — vale revisar se isso é aceitável para os dados de origem.
-
-# Módulo de geração de relatório
-
-## O que esse módulo faz
-
-O módulo [src/relatorio.py](src/relatorio.py) é responsável por gerar o relatório de divergências a partir dos dados de entrada, aplicando as regras de negócio definidas nos demais módulos do projeto.
-
-Ele atua como orquestrador do processo de validação, chamando funções específicas para verificar:
-
-- a estrutura do relatório e a presença de campos obrigatórios;
-- a existência e o status dos lotes;
-- a normalização e a consistência do campo de status;
-- a obrigatoriedade de observação para lotes reprovados.
-
-## Funções principais
-
-### encontrar_divergencias(relatorio)
-
-Essa função recebe um DataFrame com os dados do relatório e executa o fluxo completo de validação.
-
-O fluxo é o seguinte:
-
-1. Valida a estrutura do relatório com as funções de [src/modules/validacao.py](src/modules/validacao.py).
-2. Verifica campos obrigatórios e identifica linhas com valores vazios.
-3. Para cada lote, chama as validações de:
-   - [src/modules/verificacao_lotes.py](src/modules/verificacao_lotes.py) para a RN03;
-   - [src/modules/normalizacao_status.py](src/modules/normalizacao_status.py) para as regras de status;
-   - [src/modules/observacao.py](src/modules/observacao.py) para a RN07.
-4. Consolida as divergências encontradas e gera um arquivo Excel com os lotes problemáticos.
-
-### gerar_relatorio_excel(df_original, rn02, rn03, rn06, rn07, caminho_saida)
-
-Essa função organiza as divergências recebidas e exporta um relatório em formato Excel contendo apenas os registros que apresentaram alguma inconsistência.
-
-O resultado inclui uma coluna chamada `Motivo_Divergencia`, com os motivos associados a cada lote.
-
-## Regras que o módulo consulta
-
-O módulo utiliza as seguintes validações:
-
-- RN01 e RN02: estrutura do relatório e campos obrigatórios;
-- RN03: existência do lote na base de referência;
-- RN04 e RN05: validação e normalização do status;
-- RN07: observação obrigatória para lote reprovado.
-
-## Como executar
-
-A partir da raiz do projeto, o módulo pode ser executado diretamente com:
+Com o servidor no ar, abra `http://127.0.0.1:8000/docs` para testar os
+endpoints direto no navegador (Swagger UI gerado automaticamente pelo
+FastAPI), ou use `curl`:
 
 ```bash
-python src/relatorio.py
+# 1. Envia a planilha, recebe o resumo (e o id do relatório gerado)
+curl -F "arquivo=@dados_referencia/inspecao_lotes_10dias.xlsx" \
+     http://127.0.0.1:8000/api/aula22/dashboard
+
+# 2. Baixa o .xlsx com o dashboard (troque <id> pelo valor devolvido acima)
+curl -o relatorio_conferencia_lotes.xlsx \
+     http://127.0.0.1:8000/api/aula22/dashboard/<id>/download
+
+# 3. (opcional) consulta o log de execução em texto puro
+curl http://127.0.0.1:8000/api/aula22/dashboard/<id>/log
 ```
 
-Isso lê o arquivo CSV em `data/processed/dados_relatorio.csv` e gera um relatório Excel em `data/processed/`.
+| Método | Rota | Faz o quê |
+|--------|------|-----------|
+| `POST` | `/api/aula22/dashboard` | Recebe o upload (`.xlsx`/`.xls`), classifica e já gera o relatório. Devolve `id`, `total`, `por_classificacao`, `percentual` e `evolucao_por_dia`. |
+| `GET` | `/api/aula22/dashboard/{id}/download` | Devolve o `.xlsx` de 6 abas + dashboard, pelo `id` retornado no passo anterior. |
+| `GET` | `/api/aula22/dashboard/{id}/log` | Devolve o log de execução (texto puro): data/hora, totais por classificação, dias processados. |
 
-## Exemplo de uso
+O arquivo gerado fica num diretório temporário do sistema, associado ao
+`id` num dicionário em memória — válido enquanto o processo do servidor
+estiver de pé. Suficiente para uso local; não é pensado para produção
+com múltiplas instâncias.
 
-```python
-import pandas as pd
-from src.relatorio import encontrar_divergencias
+O frontend em `webapp/static/` (HTML/CSS/JS puro, sem framework, sem
+build step) chama esses três endpoints pelo navegador — abra
+`http://127.0.0.1:8000/` com o servidor no ar. Visual inspirado na
+identidade da LG (vermelho `#A50034`), com blobs suaves e cantos bem
+arredondados.
 
-relatorio = pd.read_csv('data/processed/dados_relatorio.csv')
-encontrar_divergencias(relatorio)
-```
-
-## Saída gerada
-
-O módulo produz:
-
-- logs detalhados em `logs/relatorio.log`;
-- um arquivo Excel com os lotes divergentes em `data/processed/`;
-- uma consolidação dos motivos de divergência para cada linha do relatório.
+Testes em [tests/test_webapp_aula22.py](tests/test_webapp_aula22.py).
