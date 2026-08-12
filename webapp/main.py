@@ -36,9 +36,15 @@ def _classificar_upload(nome_arquivo: str, conteudo: bytes) -> list:
 
     carregar_planilha_10dias lê de um caminho em disco (via
     pd.ExcelFile), não de bytes em memória — por isso o passo
-    intermediário de escrever num arquivo temporário, que é descartado
-    logo depois de lido (só o .xlsx de saída precisa persistir, para o
-    download).
+    intermediário de escrever num arquivo temporário.
+
+    No Windows, um arquivo aberto por um handle (o do
+    NamedTemporaryFile) não pode ser reaberto por outro processo/handle
+    (o do pandas) enquanto o primeiro não for fechado — daí o
+    PermissionError [Errno 13] quando isso é feito dentro do mesmo
+    bloco "with". Por isso aqui: criamos com delete=False, fechamos
+    explicitamente antes de chamar carregar_planilha_10dias, e
+    apagamos manualmente no final (bloco finally).
     """
     nome = (nome_arquivo or "").lower()
     if not nome.endswith(EXTENSOES_ACEITAS):
@@ -47,9 +53,10 @@ def _classificar_upload(nome_arquivo: str, conteudo: bytes) -> list:
             detail="Formato não suportado. Envie um arquivo .xlsx ou .xls.",
         )
 
-    with tempfile.NamedTemporaryFile(suffix=".xlsx") as arquivo_temporario:
+    arquivo_temporario = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
         arquivo_temporario.write(conteudo)
-        arquivo_temporario.flush()
+        arquivo_temporario.close()  # libera o handle antes do pandas reabrir o arquivo (necessário no Windows)
 
         try:
             registros_por_dia, base_referencia = carregar_planilha_10dias(arquivo_temporario.name)
@@ -60,6 +67,17 @@ def _classificar_upload(nome_arquivo: str, conteudo: bytes) -> list:
                 status_code=400,
                 detail=f"Não foi possível ler o arquivo enviado: {erro}",
             ) from erro
+    finally:
+        try:
+            Path(arquivo_temporario.name).unlink(missing_ok=True)
+        except PermissionError:
+            # No Windows, pandas/openpyxl às vezes mantém o handle do
+            # arquivo aberto internamente (via ExcelFile não fechado)
+            # mesmo depois de já termos lido os dados. Isso não afeta o
+            # resultado — é só um arquivo temporário que o SO limpa
+            # sozinho mais tarde — então não deixamos isso quebrar a
+            # resposta ao usuário.
+            pass
 
     return classificar_lotes(registros_por_dia, base_referencia)
 
