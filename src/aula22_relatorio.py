@@ -25,6 +25,13 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.chart import DoughnutChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.text import RichText
+from openpyxl.drawing.text import (
+    CharacterProperties,
+    Paragraph,
+    ParagraphProperties,
+    RichTextProperties,
+)
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -103,6 +110,35 @@ def _serie_evolucao_por_dia(registros: list[RegistroValidado]) -> "OrderedDict[s
     return dias
 
 
+def _rotulo_curto_dia(data_referencia: str) -> str:
+    """'15/06/2026' -> '15/06'. Datas completas lado a lado no eixo do
+    gráfico de evolução se sobrepõem (10 rótulos longos) e viram uma
+    linha sólida ilegível — o ano é redundante aqui, já que os 10 dias
+    do relatório são todos do mesmo ano."""
+    return datetime.strptime(data_referencia, "%d/%m/%Y").strftime("%d/%m")
+
+
+def _rotacionar_rotulos_eixo(eixo, graus: int = -45) -> None:
+    """Inclina os rótulos do eixo em `graus` graus para caberem sem
+    sobrepor, quando há muitas categorias (ex.: 10 dias).
+
+    Também reduz o tamanho da fonte dos rótulos (sz=900 = 9pt, contra
+    o padrão de ~10-18pt) — sem isso, o texto rotacionado em -45° não
+    cabe na área reservada abaixo do plot area e o Excel/LibreOffice
+    corta visualmente o final de cada rótulo (ex.: "15/..." em vez de
+    "15/06"). Fonte menor = a "caixa" necessária pro texto rotacionado
+    fica menor e passa a caber no espaço disponível.
+    """
+    rot = int(graus * 60000)  # openpyxl espera 1/60000 de grau
+    propriedades_corpo = RichTextProperties(rot=rot, vert="horz")
+    fonte_rotulo = CharacterProperties(sz=900)
+    paragrafo = Paragraph(
+        pPr=ParagraphProperties(defRPr=fonte_rotulo),
+        endParaRPr=fonte_rotulo,
+    )
+    eixo.txPr = RichText(bodyPr=propriedades_corpo, p=[paragrafo])
+
+
 def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> None:
     ws = wb.create_sheet("Resumo", 0)  # sempre a primeira aba
 
@@ -152,9 +188,22 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     rosca.set_categories(categorias_rosca)
     rosca.height = 8
     rosca.width = 12
-    rosca.dataLabels = DataLabelList()
-    rosca.dataLabels.showPercent = True
-    ws.add_chart(rosca, "A14")
+    # Só percentual no rótulo — sem isso, o openpyxl deixa
+    # showCatName/showSerName/showVal indefinidos e o Excel/LibreOffice
+    # os preenche como True, resultando em rótulos poluídos do tipo
+    # "Total; Válido; 150; 60%" em vez de só "60%".
+    rosca.dataLabels = DataLabelList(
+        showPercent=True,
+        showCatName=False,
+        showSerName=False,
+        showVal=False,
+        showLegendKey=False,
+        showBubbleSize=False,
+    )
+    # Obs.: rosca só é ancorada na planilha mais abaixo, junto com o
+    # gráfico de evolução, depois que a tabela "Dia" for escrita (ver
+    # linha_ancora_graficos) — assim garantimos que nenhum gráfico
+    # sobrepõe as tabelas de apoio.
 
     # --- Tabela de apoio para o gráfico de evolução por dia ---
     serie_dias = _serie_evolucao_por_dia(registros)
@@ -165,7 +214,7 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
 
     for offset, (dia, valores_dia) in enumerate(serie_dias.items(), start=1):
         linha = linha_base_evolucao + offset
-        ws.cell(row=linha, column=1, value=dia)
+        ws.cell(row=linha, column=1, value=_rotulo_curto_dia(dia))
         ws.cell(row=linha, column=2, value=valores_dia["total"])
         ws.cell(row=linha, column=3, value=valores_dia["Válido"])
         ws.cell(row=linha, column=4, value=valores_dia["Divergência"])
@@ -179,7 +228,9 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     linha_grafico.title = "Evolução dos registros por dia"
     linha_grafico.style = 10
     linha_grafico.y_axis.title = "Registros"
+    linha_grafico.y_axis.scaling.min = 0
     linha_grafico.x_axis.title = "Dia"
+    linha_grafico.x_axis.delete = False
     # Série obrigatória: Divergência + Ambíguo (coluna 7) — revela se o problema piora/melhora
     dados_evolucao = Reference(
         ws, min_col=7, max_col=7, min_row=linha_base_evolucao, max_row=ultima_linha_evolucao
@@ -192,9 +243,21 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     linha_grafico.add_data(dados_total, titles_from_data=True)
     linha_grafico.add_data(dados_evolucao, titles_from_data=True)
     linha_grafico.set_categories(categorias_evolucao)
-    linha_grafico.height = 8
+    # 10 rótulos de dia lado a lado se sobrepõem se ficarem na
+    # horizontal — inclinar evita que virem uma linha sólida ilegível.
+    _rotacionar_rotulos_eixo(linha_grafico.x_axis)
+    linha_grafico.height = 10
     linha_grafico.width = 18
-    ws.add_chart(linha_grafico, "D14")
+
+    # Âncora dos gráficos: sempre abaixo da última linha escrita (tabela
+    # "Dia"), calculada dinamicamente. Antes estava fixa em "A14"/"D14",
+    # que é justamente onde a tabela "Dia" é escrita (linha_base_evolucao
+    # também é 14) — por isso os dois gráficos apareciam flutuando em
+    # cima da tabela e um em cima do outro (A e D ficam muito próximas
+    # para a largura de 12-18cm de cada gráfico).
+    linha_ancora_graficos = ultima_linha_evolucao + 3
+    ws.add_chart(rosca, f"A{linha_ancora_graficos}")
+    ws.add_chart(linha_grafico, f"H{linha_ancora_graficos}")
 
     ws.column_dimensions["A"].width = 20
 
