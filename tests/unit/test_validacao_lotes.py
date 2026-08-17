@@ -80,17 +80,27 @@ def test_status_outros_valores_alem_de_ativo_conta_como_falso():
 # Casos de borda que expõem falhas reais do código atual
 # ---------------------------------------------------------------------
 
-def test_lote_duplicado_quebra_a_funcao():
-    """BUG real: se houver lote_id duplicado na base (dado que a RN03
-    não impede), `.item()` levanta ValueError porque espera exatamente
-    um valor. Isso deixaria o sistema fora do ar em produção diante de
-    um problema de qualidade de dados, em vez de tratar graciosamente."""
+@pytest.mark.xfail(
+    reason="Bug conhecido: verificar_status_lote usa .item() que levanta "
+           "ValueError quando há lote_id duplicado na Base_Referencia — "
+           "deveria retornar o status da primeira ocorrência ou sinalizar "
+           "duplicidade de forma controlada (sem estourar exceção)",
+    raises=ValueError,
+    strict=True,
+)
+def test_lote_duplicado_deveria_ser_tratado_sem_excecao():
+    """Comportamento desejado: com lote duplicado na base, a função
+    deveria retornar um resultado (True/False) sem levantar exceção.
+    Hoje levanta ValueError — por isso este teste é xfail."""
     df = pd.DataFrame({
         "lote_id": ["LOTE001", "LOTE001"],
         "status_cadastro": ["Ativo", "Inativo"],
     })
-    with pytest.raises(ValueError):
-        modulo.verificar_status_lote(df, "LOTE001")
+    # Quando o bug for corrigido, esta linha vai funcionar sem exceção
+    # e o teste vai passar (XPASS → strict faz ele virar FAIL, avisando
+    # que o xfail pode ser removido)
+    resultado = modulo.verificar_status_lote(df, "LOTE001")
+    assert resultado in (True, False)
 
 
 def test_lote_none_e_tratado_silenciosamente_como_nao_encontrado(base_padrao):
@@ -140,3 +150,22 @@ def test_carregar_base_referencia_retorna_dataframe_quando_arquivo_existe(tmp_pa
     assert not base.empty
     assert "lote_id" in base.columns
     assert "status_cadastro" in base.columns
+
+
+# ---------------------------------------------------------------------
+# Regras futuras (ainda não implementadas)
+# ---------------------------------------------------------------------
+
+@pytest.mark.skip(
+    reason="RN13 (tolerância de data ±1 dia útil) ainda não implementada — "
+           "regra futura prevista para quando o pipeline processar dados "
+           "com atraso de envio (ex.: planilha de sexta chega só na segunda)"
+)
+def test_tolerancia_de_data_permite_1_dia_util_de_atraso():
+    """Quando implementada, a RN13 deve aceitar que a data do registro
+    esteja até 1 dia útil antes/depois da data da aba, sem classificar
+    como Erro de Entrada."""
+    # Arrange: registro do dia 15 (segunda) com data 16 (terça) — 1 dia útil
+    # Act: classificar_registro(...)
+    # Assert: não deve ser Erro de Entrada por RN12
+    pass
