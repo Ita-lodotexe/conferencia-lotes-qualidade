@@ -217,5 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Evidencias
-evidencias/
+# Evidencias geradas em runtime na raiz do projeto (screenshots etc.).
+# Barra inicial: NÃO deve casar com docs/evidencias/, que é versionada
+# de propósito (ex.: relatório de cobertura da Aula 23).
+/evidencias/

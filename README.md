@@ -41,18 +41,88 @@ gráficos nativos do Excel), `fastapi`/`uvicorn`/`python-multipart`/`httpx`
 (interface web, em construção), `pytest` (testes) e `dvc` (versionamento
 de dados, opcional).
 
-## Como rodar os testes
+## Testes
+
+A suíte de testes segue a pirâmide de testes da Aula 23, organizada em
+camadas:
+
+```
+tests/
+├── conftest.py              # fixtures compartilhadas (Base_Referencia mockada)
+├── unit/                    # testes rápidos e isolados
+│   ├── test_normalizacao_status.py
+│   ├── test_observacao.py
+│   ├── test_validacao.py
+│   ├── test_validacao_lotes.py
+│   ├── test_aula22_classificacao.py
+│   ├── test_validacao_testcase.py        # unittest.TestCase com setUp/subTest
+│   └── test_classificacao_parametrize.py # parametrize com IDs descritivos
+├── integration/             # colaboração entre módulos
+│   ├── test_aula22_relatorio.py          # gera .xlsx em tmp_path
+│   └── test_webapp_aula22.py             # API via TestClient
+└── e2e/                     # fluxo completo (requer dataset real)
+    └── test_contra_gabarito.py
+```
+
+A suíte inteira roda com dados **sintéticos** (inventados só para o
+teste) — você não precisa de nenhum arquivo externo para ver os testes
+passando. Os 3 testes em `tests/e2e/test_contra_gabarito.py` são
+pulados automaticamente se o dataset real de avaliação não estiver
+presente — veja ["O dataset real e o gabarito"](#o-dataset-real-e-o-gabarito)
+abaixo.
+
+### Rodar a suíte completa
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Isso roda a suíte inteira usando dados **sintéticos** (inventados só
-para o teste) — você não precisa de nenhum arquivo externo para ver os
-testes passando. Três testes específicos (em
-`tests/test_contra_gabarito.py`) são pulados automaticamente se o
-dataset real de avaliação não estiver presente — veja a seção
-["O dataset real e o gabarito"](#o-dataset-real-e-o-gabarito) abaixo.
+### Rodar por camada
+
+```bash
+python -m pytest tests/ -m unit -v           # só unitários
+python -m pytest tests/ -m integration -v    # só integração
+python -m pytest tests/ -m e2e -v            # só E2E (precisa do dataset real)
+python -m pytest tests/ -m regression -v     # só proteção contra regressões
+```
+
+### Combinar markers
+
+```bash
+python -m pytest tests/ -m "unit or integration" -v   # tudo exceto E2E
+python -m pytest tests/ -m "not e2e" -v               # equivalente ao acima
+```
+
+### Cobertura
+
+```bash
+python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=80
+```
+
+O relatório de cobertura da última execução está em
+[`docs/evidencias/cobertura_aula23.txt`](docs/evidencias/cobertura_aula23.txt)
+— 99% de cobertura em `src/` (limiar exigido: 80%).
+
+### Markers disponíveis
+
+| Marker | Significado |
+|--------|-------------|
+| `unit` | Testes rápidos e isolados de funções individuais |
+| `integration` | Testes de colaboração entre módulos (leitura + validação + relatório) |
+| `e2e` | Fluxo completo das 10 abas ao relatório final |
+| `regression` | Protege bugs já corrigidos contra reintrodução silenciosa |
+
+### Convenções
+
+- **Falhas conhecidas** são documentadas com `@pytest.mark.xfail(reason="...")`,
+  nunca comentadas ou apagadas.
+- **Funcionalidades futuras** sem implementação usam
+  `@pytest.mark.skip(reason="...")`.
+- Testes E2E (`test_contra_gabarito.py`) são pulados automaticamente se o
+  dataset real não estiver em `dados_referencia/`.
+- Testes que geram arquivos usam `tmp_path` — nada é escrito no repo.
+- Dependências externas (Base_Referencia, datetime) são mockadas com
+  `unittest.mock.patch`.
 
 ## Como rodar o pipeline com uma planilha de verdade
 
@@ -104,14 +174,13 @@ src/
   aula22_classificacao.py     # motor de classificação: aplica RN01-RN12 e decide a categoria
   aula22_relatorio.py         # gera o .xlsx de 6 abas + dashboard nativo
 
-tests/                        # um arquivo de teste por módulo acima, mais os testes de
-                               # integração contra o gabarito real (test_contra_gabarito.py)
+tests/                        # unit/, integration/, e2e/ + conftest.py — ver seção "Testes"
 
-webapp/                       # interface web (FastAPI) — em construção, ver seção final
+webapp/                       # interface web (FastAPI + frontend), ver seção "Interface web"
 
 data/processed/               # base de referência em CSV, usada por alguns testes
 dados_referencia/              # (crie esta pasta) coloque aqui o dataset real de 10 dias
-docs/                         # relatórios de levantamento do estado do projeto (histórico)
+docs/evidencias/               # evidências versionadas (ex.: relatório de cobertura)
 ```
 
 ### Por que `src/modules/` e `src/aula22_*.py` são coisas separadas
@@ -214,7 +283,7 @@ dados_referencia/inspecao_lotes_10dias.xlsx
 ```
 
 Com o arquivo nesse caminho, `python -m pytest tests/ -v` deixa de pular
-os 3 testes de `tests/test_contra_gabarito.py` e passa a validar de
+os 3 testes de `tests/e2e/test_contra_gabarito.py` e passa a validar de
 ponta a ponta: 250 registros totais, 100 divergências propositais, e a
 distribuição exata por dia (5 Divergência + 2 Ambíguo + 3 Erro de
 Entrada, todos os dias). Sem o arquivo, esses 3 testes continuam
