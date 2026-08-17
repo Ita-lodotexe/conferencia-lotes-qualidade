@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 from webapp.main import app
 
+pytestmark = pytest.mark.integration
+
 client = TestClient(app)
 
 

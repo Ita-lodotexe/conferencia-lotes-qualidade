@@ -3,26 +3,17 @@
 Cobre cada regra isoladamente e a ordem de precedência entre elas
 (cada registro cai em exatamente uma das 4 categorias). Usa dados
 sintéticos — não depende do dataset real de 10 dias, que não é
-distribuído no repositório (ver tests/test_contra_gabarito.py para a
-validação de ponta a ponta contra o gabarito real, quando disponível).
+distribuído no repositório (ver tests/e2e/test_contra_gabarito.py para
+a validação de ponta a ponta contra o gabarito real, quando disponível).
+
+A fixture `base_referencia` vem de tests/conftest.py.
 """
 
-import pandas as pd
 import pytest
 
 from src.aula22_classificacao import RegistroValidado, classificar_lotes, classificar_registro
 
-
-@pytest.fixture
-def base_referencia():
-    return pd.DataFrame(
-        {
-            "lote_id": ["L001", "L002", "L004"],
-            "codigo_produto": ["TV", "TV", "TV"],
-            "descricao_produto": ["Televisão", "Televisão", "Televisão"],
-            "status_cadastro": ["Ativo", "Inativo", "Ativo"],
-        }
-    )
+pytestmark = pytest.mark.unit
 
 
 def _registro(**overrides):

@@ -6,8 +6,11 @@ Executar da raiz do projeto com:  python -m pytest -v
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.modules.validacao import valida_campos_obrigatorios, valida_estrutura
+
+pytestmark = pytest.mark.unit
 
 
 def _planilha_valida() -> pd.DataFrame:

@@ -4,6 +4,8 @@
 import pytest
 from src.modules.normalizacao_status import normalizar_status, validar_status
 
+pytestmark = pytest.mark.unit
+
 
 class TestNormalizarStatusRN05:
     """RN05 — OK vira APROVADO, NOK vira REPROVADO, antes de qualquer validação."""

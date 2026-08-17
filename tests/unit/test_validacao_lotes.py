@@ -9,6 +9,8 @@ import pytest
 
 from src.modules import verificacao_lotes as modulo
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def base_padrao():

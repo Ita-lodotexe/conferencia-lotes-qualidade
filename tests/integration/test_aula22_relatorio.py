@@ -12,6 +12,8 @@ import pytest
 from src.aula22_classificacao import RegistroValidado
 from src.aula22_relatorio import NOMES_ABA, gerar_relatorio_aula22
 
+pytestmark = pytest.mark.integration
+
 
 def _registro(dia, data_referencia, lote_id, classificacao, regra, **overrides):
     base = dict(
