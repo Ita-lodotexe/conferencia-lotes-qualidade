@@ -10,9 +10,11 @@ pytestmark = pytest.mark.unit
 class TestNormalizarStatusRN05:
     """RN05 — OK vira APROVADO, NOK vira REPROVADO, antes de qualquer validação."""
 
+    @pytest.mark.regression
     def test_ok_normaliza_para_aprovado(self):
         assert normalizar_status("OK") == "APROVADO"
 
+    @pytest.mark.regression
     def test_nok_normaliza_para_reprovado(self):
         assert normalizar_status("NOK") == "REPROVADO"
 

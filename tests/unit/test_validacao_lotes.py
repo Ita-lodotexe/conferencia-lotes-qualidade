@@ -80,6 +80,7 @@ def test_status_outros_valores_alem_de_ativo_conta_como_falso():
 # Casos de borda que expõem falhas reais do código atual
 # ---------------------------------------------------------------------
 
+@pytest.mark.regression
 @pytest.mark.xfail(
     reason="Bug conhecido: verificar_status_lote usa .item() que levanta "
            "ValueError quando há lote_id duplicado na Base_Referencia — "

@@ -61,6 +61,7 @@ def test_gera_6_abas_com_nomes_e_ordem_corretos(tmp_path, registros):
     assert wb.sheetnames == ["Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada"]
 
 
+@pytest.mark.regression
 def test_nenhuma_aba_mistura_classificacoes(tmp_path, registros):
     caminho = tmp_path / "relatorio.xlsx"
     gerar_relatorio_aula22(registros, str(caminho))

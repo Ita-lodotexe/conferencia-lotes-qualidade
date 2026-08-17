@@ -40,6 +40,7 @@ def test_registro_conforme_e_valido(base_referencia):
     assert resultado.regra == "RN08"
 
 
+@pytest.mark.regression
 @pytest.mark.parametrize("campo", ["lote_id", "produto", "linha", "status", "responsavel"])
 def test_campo_obrigatorio_vazio_e_erro_de_entrada(base_referencia, campo):
     resultado = classificar_registro(
@@ -49,6 +50,7 @@ def test_campo_obrigatorio_vazio_e_erro_de_entrada(base_referencia, campo):
     assert resultado.regra == "RN01-RN04"
 
 
+@pytest.mark.regression
 def test_turno_vazio_nao_e_campo_obrigatorio(base_referencia):
     """turno não está em CAMPOS_OBRIGATORIOS_LOTE — vazio não deve gerar Erro de Entrada."""
     resultado = classificar_registro(_registro(turno=""), ocorrencia_no_dia=1, base_referencia=base_referencia)
@@ -120,6 +122,7 @@ def test_ok_normaliza_para_aprovado(base_referencia):
     assert resultado.status_normalizado == "APROVADO"
 
 
+@pytest.mark.regression
 def test_precedencia_erro_de_entrada_antes_de_divergencia(base_referencia):
     """lote_id vazio (RN01-04) tem prioridade sobre RN05/RN11, mesmo que o
     restante do registro também dispararia outras regras."""
@@ -139,6 +142,7 @@ def test_precedencia_rn05_antes_de_rn09(base_referencia):
     assert resultado.regra == "RN05"
 
 
+@pytest.mark.regression
 def test_lote_id_vazio_nunca_conta_como_duplicidade(base_referencia):
     """Duas linhas com lote_id vazio no mesmo dia não devem gerar RN11
     (ambas já são Erro de Entrada pela RN01-04)."""
@@ -153,6 +157,7 @@ def test_lote_id_vazio_nunca_conta_como_duplicidade(base_referencia):
     assert all(r.regra == "RN01-RN04" for r in resultado)
 
 
+@pytest.mark.regression
 def test_duplicidade_nao_conta_entre_dias_diferentes(base_referencia):
     """RN11 é por dia — o mesmo lote_id em dois dias diferentes não é duplicidade."""
     registros_por_dia = {
