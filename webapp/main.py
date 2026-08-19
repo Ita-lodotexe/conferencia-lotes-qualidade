@@ -10,10 +10,17 @@ download) em webapp/static/.
 Os indicadores são calculados uma única vez, em criar_dashboard(), e o
 mesmo objeto alimenta o Excel e o resumo_executivo.md — evitando que as
 duas saídas divirjam entre si (ver src/operational_indicators.py).
+
+Os registros Ambíguos elegíveis (ver src/item_processor.py) são
+encaminhados ao MLClient uma única vez por upload; o mesmo
+`ml_client_global`, em nível de módulo, é reaproveitado entre
+requisições de propósito — uma instância por requisição faria o
+circuit breaker nunca acumular estado (Exercício 24-A, Commit 5).
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -25,6 +32,8 @@ from fastapi.staticfiles import StaticFiles
 from src.aula22_classificacao import classificar_lotes
 from src.aula22_preprocessador import carregar_planilha_10dias
 from src.aula22_relatorio import gerar_relatorio_aula22
+from src.item_processor import processar_registros_ambiguos
+from src.ml_client import MLClient
 from src.operational_indicators import calcular_indicadores
 from src.resumo_executivo import gerar_resumo_executivo
 
@@ -34,7 +43,12 @@ app = FastAPI(title="Conferência de Lotes — Dashboard Aula 22")
 
 EXTENSOES_ACEITAS = (".xlsx", ".xls")
 
-# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str, "resumo_executivo": Path do .md gerado}
+# Porta 8001: a mapeada para api-ml no docker-compose.yml do Commit 3.
+ML_API_URL = os.environ.get("ML_API_URL", "http://localhost:8001")
+ml_client_global = MLClient(base_url=ML_API_URL)
+
+# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str,
+#        "resumo_executivo": Path do .md gerado, "decisoes_ml": list[dict]}
 _dashboards_gerados: dict[str, dict] = {}
 
 
@@ -102,7 +116,10 @@ async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
     caminho_resumo_executivo = caminho_saida.with_suffix(".md")
 
     indicadores = calcular_indicadores(registros)
-    resultado = gerar_relatorio_aula22(registros, str(caminho_saida), indicadores=indicadores)
+    decisoes_ml = processar_registros_ambiguos(registros, ml_client_global)
+    resultado = gerar_relatorio_aula22(
+        registros, str(caminho_saida), indicadores=indicadores, decisoes_ml=decisoes_ml,
+    )
 
     texto_resumo_executivo = gerar_resumo_executivo(indicadores)
     caminho_resumo_executivo.write_text(texto_resumo_executivo, encoding="utf-8")
@@ -115,6 +132,7 @@ async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
         "resumo": resumo,
         "log": resultado["log"],
         "resumo_executivo": caminho_resumo_executivo,
+        "decisoes_ml": decisoes_ml,
     }
 
     return {

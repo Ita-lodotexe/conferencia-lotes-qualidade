@@ -8,7 +8,10 @@ STATUS_AMBIGUO_PARA_ML abaixo.
 from __future__ import annotations
 
 from src.aula22_classificacao import RegistroValidado
+from src.logging_estruturado import configurar_logger_decisoes_ml
 from src.ml_client import MLClient
+
+_logger = configurar_logger_decisoes_ml()
 
 # status_normalizado (RN09) é texto livre — "EM AJUSTE", "CANCELADO",
 # "REPROV.", "APROVADO PARCIAL", "AGUARDANDO REINSPEÇÃO" ou qualquer
@@ -39,8 +42,13 @@ def _resultado(
 ) -> dict:
     """Forma estável de retorno — todo caminho de processar_item_ambiguo
     passa por aqui, para alimentar a 9ª aba do Excel e o log estruturado
-    (próximo commit) sem variação de formato entre os caminhos."""
-    return {
+    sem variação de formato entre os caminhos. Também é o único ponto
+    que emite a linha de log em "ml.decisoes" (Seção 3.4) — logando
+    aqui, e não em cada `return` de processar_item_ambiguo, garante que
+    sucesso, "não aplicável" e REVISAO_ML_OFFLINE sejam logados de
+    forma idêntica, sem duplicar a chamada de log em cada caminho.
+    """
+    resultado = {
         "lote_id": lote_id,
         "entrou_no_ml": entrou_no_ml,
         "classe_ml": classe_ml,
@@ -49,6 +57,8 @@ def _resultado(
         "latencia_ms": latencia_ms,
         "motivo": motivo,
     }
+    _logger.info("decisão de ML processada para o lote", extra=resultado)
+    return resultado
 
 
 def processar_item_ambiguo(registro: RegistroValidado, ml_client: MLClient) -> dict:

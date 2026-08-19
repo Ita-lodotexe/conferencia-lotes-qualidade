@@ -325,12 +325,47 @@ def _escrever_aba_dicionario(wb: Workbook) -> None:
     ws.freeze_panes = "A2"
 
 
+def _escrever_aba_decisoes_ml(wb: Workbook, decisoes_ml: list[dict]) -> None:
+    """Aba "Decisões de ML" (Exercício 24-A, Seção 3.4): uma linha por item
+    de `decisoes_ml` (saída de src.item_processor.processar_registros_ambiguos),
+    na ordem recebida — sem reordenar nem filtrar, para bater 1:1 com a
+    aba "Ambíguos" em número de linhas.
+    """
+    ws = wb.create_sheet("Decisões de ML")
+    ws.append([
+        "Lote", "Entrou no ML?", "Classe (ML)", "Probabilidade",
+        "Nível de Confiança", "Latência (ms)", "Motivo",
+    ])
+    for celula in ws[1]:
+        celula.font = Font(bold=True, color=COR_TEXTO_CABECALHO)
+        celula.fill = PatternFill("solid", fgColor=COR_CABECALHO)
+        celula.alignment = Alignment(horizontal="center")
+
+    for item in decisoes_ml:
+        ws.append([
+            item.get("lote_id"),
+            item.get("entrou_no_ml"),
+            item.get("classe_ml"),
+            item.get("probabilidade_ml"),
+            item.get("decisao_ml"),
+            item.get("latencia_ms"),
+            item.get("motivo"),
+        ])
+
+    for indice, largura in enumerate([14, 14, 20, 14, 20, 14, 45], start=1):
+        ws.column_dimensions[get_column_letter(indice)].width = largura
+    ws.freeze_panes = "A2"
+    if decisoes_ml:
+        ws.auto_filter.ref = f"A1:G{len(decisoes_ml) + 1}"
+
+
 def gerar_relatorio_aula22(
     registros: list[RegistroValidado],
     caminho_saida: str,
     indicadores: OperationalIndicators | None = None,
+    decisoes_ml: list[dict] | None = None,
 ) -> dict:
-    """Gera o .xlsx de 8 abas + dashboard nativo e devolve um resumo em memória.
+    """Gera o .xlsx (8 ou 9 abas) + dashboard nativo e devolve um resumo em memória.
 
     Args:
         registros: lista de RegistroValidado já classificados.
@@ -341,6 +376,12 @@ def gerar_relatorio_aula22(
             chamador (webapp/main.py) é calcular uma única vez e passar
             adiante, para o Excel e o resumo_executivo.md nascerem do
             mesmo objeto e nunca divergirem entre si.
+        decisoes_ml: saída de
+            src.item_processor.processar_registros_ambiguos(registros, ...),
+            ou None. A 9ª aba "Decisões de ML" só é escrita quando este
+            parâmetro não é None (mesmo que seja uma lista vazia) — isso
+            preserva o comportamento de 8 abas para quem chama esta função
+            sem saber de ML (Exercício 24-A, Commits 1-3).
 
     Returns:
         dict com "resumo" (contagens/percentuais), "arquivo" (caminho) e
@@ -360,6 +401,8 @@ def gerar_relatorio_aula22(
         _escrever_aba_tabela(wb, nome_aba, _dataframe_por_classificacao(registros, classificacao))
     _escrever_aba_ranking_regras(wb, indicadores)
     _escrever_aba_dicionario(wb)
+    if decisoes_ml is not None:
+        _escrever_aba_decisoes_ml(wb, decisoes_ml)
 
     wb.save(caminho_saida)
     logger.info("Relatório salvo em %s", caminho_saida)

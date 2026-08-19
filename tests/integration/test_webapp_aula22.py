@@ -63,7 +63,13 @@ def test_post_dashboard_retorna_resumo_com_id(upload_ok):
     assert "id" in corpo
 
 
-def test_download_devolve_xlsx_com_8_abas(upload_ok):
+def test_download_devolve_xlsx_com_9_abas(upload_ok):
+    """9 abas desde o Commit 5 (Exercício 24-A): criar_dashboard() sempre
+    calcula decisoes_ml (mesmo que vazia) e passa para
+    gerar_relatorio_aula22, então a aba "Decisões de ML" está sempre
+    presente a partir do webapp — diferente de chamar
+    gerar_relatorio_aula22() diretamente sem o parâmetro (8 abas, ver
+    tests/integration/test_relatorio_decisoes_ml.py)."""
     resposta_post = client.post("/api/aula22/dashboard", files=upload_ok)
     dashboard_id = resposta_post.json()["id"]
 
@@ -75,8 +81,11 @@ def test_download_devolve_xlsx_com_8_abas(upload_ok):
     wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
     assert wb.sheetnames == [
         "Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada",
-        "Ranking de Regras", "Dicionário",
+        "Ranking de Regras", "Dicionário", "Decisões de ML",
     ]
+    # L002 (EM AJUSTE) é o único Ambíguo da planilha sintética — deve ter
+    # exatamente 1 linha de dados em "Decisões de ML".
+    assert wb["Decisões de ML"].max_row == 2
 
 
 def test_resumo_executivo_devolve_texto_markdown(upload_ok):
