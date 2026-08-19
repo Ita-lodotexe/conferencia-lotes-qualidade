@@ -79,6 +79,42 @@ def test_download_devolve_xlsx_com_8_abas(upload_ok):
     ]
 
 
+def test_resumo_executivo_devolve_texto_markdown(upload_ok):
+    resposta_post = client.post("/api/aula22/dashboard", files=upload_ok)
+    dashboard_id = resposta_post.json()["id"]
+
+    resposta = client.get(f"/api/aula22/dashboard/{dashboard_id}/resumo-executivo")
+
+    assert resposta.status_code == 200
+    assert "## Visão Geral" in resposta.text
+    assert "## Destaque" in resposta.text
+
+
+def test_resumo_executivo_com_id_inexistente_retorna_404():
+    resposta = client.get("/api/aula22/dashboard/id-que-nao-existe/resumo-executivo")
+    assert resposta.status_code == 404
+
+
+def test_excel_e_resumo_executivo_nascem_do_mesmo_objeto_de_indicadores(upload_ok):
+    """Seção 5 do enunciado: total de registros e regra mais acionada devem
+    ser idênticos no Excel (aba Resumo) e no resumo_executivo.md, porque os
+    dois nascem do mesmo OperationalIndicators calculado uma única vez."""
+    resposta_post = client.post("/api/aula22/dashboard", files=upload_ok)
+    dashboard_id = resposta_post.json()["id"]
+
+    resposta_download = client.get(f"/api/aula22/dashboard/{dashboard_id}/download")
+    resposta_resumo = client.get(f"/api/aula22/dashboard/{dashboard_id}/resumo-executivo")
+
+    wb = openpyxl.load_workbook(io.BytesIO(resposta_download.content))
+    total_no_excel = wb["Resumo"]["A5"].value
+    ranking_no_excel = wb["Ranking de Regras"]
+    regra_mais_acionada_no_excel = ranking_no_excel.cell(row=2, column=2).value  # nome legível, 1ª linha do ranking
+
+    texto_resumo = resposta_resumo.text
+    assert str(total_no_excel) in texto_resumo
+    assert regra_mais_acionada_no_excel in texto_resumo
+
+
 def test_log_devolve_texto_da_execucao(upload_ok):
     resposta_post = client.post("/api/aula22/dashboard", files=upload_ok)
     dashboard_id = resposta_post.json()["id"]

@@ -3,8 +3,13 @@ Interface web do projeto (Aula 22 — Dashboard Excel e Relatórios).
 
 Recebe o upload de `inspecao_lotes_10dias.xlsx`, roda o mesmo pipeline
 do README (carregar_planilha_10dias -> classificar_lotes ->
-gerar_relatorio_aula22), expõe o resultado por API e serve o frontend
-(upload + preview + download) em webapp/static/.
+calcular_indicadores -> gerar_relatorio_aula22 + gerar_resumo_executivo),
+expõe o resultado por API e serve o frontend (upload + preview +
+download) em webapp/static/.
+
+Os indicadores são calculados uma única vez, em criar_dashboard(), e o
+mesmo objeto alimenta o Excel e o resumo_executivo.md — evitando que as
+duas saídas divirjam entre si (ver src/operational_indicators.py).
 """
 
 from __future__ import annotations
@@ -20,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from src.aula22_classificacao import classificar_lotes
 from src.aula22_preprocessador import carregar_planilha_10dias
 from src.aula22_relatorio import gerar_relatorio_aula22
+from src.operational_indicators import calcular_indicadores
+from src.resumo_executivo import gerar_resumo_executivo
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -27,7 +34,7 @@ app = FastAPI(title="Conferência de Lotes — Dashboard Aula 22")
 
 EXTENSOES_ACEITAS = (".xlsx", ".xls")
 
-# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str}
+# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str, "resumo_executivo": Path do .md gerado}
 _dashboards_gerados: dict[str, dict] = {}
 
 
@@ -92,8 +99,13 @@ async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
 
     dashboard_id = uuid.uuid4().hex
     caminho_saida = Path(tempfile.gettempdir()) / f"relatorio_conferencia_lotes_{dashboard_id}.xlsx"
+    caminho_resumo_executivo = caminho_saida.with_suffix(".md")
 
-    resultado = gerar_relatorio_aula22(registros, str(caminho_saida))
+    indicadores = calcular_indicadores(registros)
+    resultado = gerar_relatorio_aula22(registros, str(caminho_saida), indicadores=indicadores)
+
+    texto_resumo_executivo = gerar_resumo_executivo(indicadores)
+    caminho_resumo_executivo.write_text(texto_resumo_executivo, encoding="utf-8")
 
     resumo = resultado["resumo"]
     evolucao_por_dia = [{"dia": dia, **valores} for dia, valores in resumo["evolucao_por_dia"].items()]
@@ -102,6 +114,7 @@ async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
         "arquivo": caminho_saida,
         "resumo": resumo,
         "log": resultado["log"],
+        "resumo_executivo": caminho_resumo_executivo,
     }
 
     return {
@@ -133,6 +146,15 @@ def obter_log(dashboard_id: str) -> PlainTextResponse:
         raise HTTPException(status_code=404, detail="Relatório não encontrado.")
 
     return PlainTextResponse(dados["log"])
+
+
+@app.get("/api/aula22/dashboard/{dashboard_id}/resumo-executivo")
+def obter_resumo_executivo(dashboard_id: str) -> PlainTextResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None:
+        raise HTTPException(status_code=404, detail="Relatório não encontrado.")
+
+    return PlainTextResponse(dados["resumo_executivo"].read_text(encoding="utf-8"))
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
