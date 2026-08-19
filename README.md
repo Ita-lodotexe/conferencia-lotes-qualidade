@@ -379,7 +379,7 @@ curl http://127.0.0.1:8000/api/aula22/dashboard/<id>/resumo-executivo
 | Método | Rota | Faz o quê |
 |--------|------|-----------|
 | `POST` | `/api/aula22/dashboard` | Recebe o upload (`.xlsx`/`.xls`), classifica e já gera o relatório. Devolve `id`, `total`, `por_classificacao`, `percentual` e `evolucao_por_dia`. |
-| `GET` | `/api/aula22/dashboard/{id}/download` | Devolve o `.xlsx` de 8 abas + dashboard, pelo `id` retornado no passo anterior. |
+| `GET` | `/api/aula22/dashboard/{id}/download` | Devolve o `.xlsx` de 9 abas + dashboard (8 + "Decisões de ML", ver [Exercício 24-A](#exercício-24-a--ml--rpa)), pelo `id` retornado no passo anterior. |
 | `GET` | `/api/aula22/dashboard/{id}/log` | Devolve o log de execução (texto puro): data/hora, totais por classificação, dias processados. |
 | `GET` | `/api/aula22/dashboard/{id}/resumo-executivo` | Devolve o `resumo_executivo.md` (texto puro, Markdown), calculado a partir do mesmo `OperationalIndicators` do Excel. |
 
@@ -395,3 +395,151 @@ identidade da LG (vermelho `#A50034`), com blobs suaves e cantos bem
 arredondados.
 
 Testes em [tests/integration/test_webapp_aula22.py](tests/integration/test_webapp_aula22.py).
+
+## Exercício 24-A — ML + RPA
+
+Camada de classificação por Machine Learning para os registros
+**Ambíguo** (RN09) que o motor de regras não consegue decidir por conta
+própria — um `RandomForestClassifier` treinado num dataset sintético
+sugere uma classe e um nível de confiança, e o bot decide o que fazer
+com essa sugestão. Roda como um **serviço HTTP separado**
+(`api_ml/`) — o bot nunca importa `scikit-learn` nem o `.pkl`
+diretamente, só fala com essa API (separação de responsabilidades).
+
+### O dataset sintético (`train_model.py`)
+
+Não existe (ainda) um histórico real de decisões de conferência de
+lotes rotulado por humano, então `train_model.py` fabrica um substituto
+plausível: 300 amostras, 3 features já numéricas (`status_raw`
+0–4, `turno` 0–2, `tem_obs` 0/1) e 3 classes alvo (`valido_automatico`,
+`revisar`, `recusar_automatico`), com `numpy.random.seed(42)` para
+reprodutibilidade.
+
+A classe de cada amostra é sorteada (não é uma regra determinística) a
+partir de uma distribuição de probabilidade que depende de
+`status_raw`/`tem_obs` — ver a tabela completa no docstring do módulo.
+O ruído é proposital: um classificador que acertasse 100% estaria só
+decorando a regra de geração, não aprendendo um padrão estatístico.
+
+Uma decisão de design que vale registrar: `status_raw` **não** é
+sorteado uniformemente entre os 5 valores. Com distribuição uniforme
+(20% para cada status), o teto teórico de acurácia (o melhor que
+qualquer classificador poderia acertar, mesmo perfeito, dado o ruído
+das próprias regras de geração) fica em ~67% — porque PENDENTE/
+EM_AJUSTE/CANCELADO juntos somariam 60% das amostras, e é justamente
+o grupo com o sinal mais fraco (a classe majoritária ali tem só 60% de
+probabilidade, contra 85%/70% dos outros grupos). Redistribuindo os
+pesos para 45% APROVADO / 30% REPROVADO / 10% PENDENTE / 8% EM_AJUSTE /
+7% CANCELADO (`PESOS_STATUS_RAW` em `train_model.py`) — refletindo que,
+no domínio real, a maioria dos lotes chega a uma decisão fechada — esse
+teto sobe para **~74%**. O resultado medido no `train_model.py` atual é
+**73,33% de accuracy** no split de teste (80/20, `seed=42`), bem
+próximo do teto teórico — ou seja, o modelo está aprendendo o que há
+para aprender desse dataset, não é uma acurácia artificialmente baixa
+por bug. (Esse número é do dataset sintético atual; se `train_model.py`
+mudar, rode `python train_model.py` de novo para conferir o valor
+corrente — ele imprime `accuracy` e `classification_report` no
+terminal.)
+
+### Por que RandomForestClassifier, e por que 0,85/0,65
+
+- **RandomForestClassifier**: robusto em datasets pequenos (300
+  amostras) e com poucas features categóricas já numéricas, não exige
+  normalização de escala, e — crucial para este exercício — expõe
+  `predict_proba()` de forma direta, o que é a base de toda a
+  calibração de confiança do Commit 2 (`_calibrar_decisao` em
+  `api_ml/main.py`).
+- **Limiares 0,85 (ação automática) e 0,65 (revisão)**: não são valores
+  arbitrários de biblioteca, são uma decisão de risco de negócio. Uma
+  banca pode perguntar "por que não 0,90 ou 0,50?" — a resposta é que
+  o limiar alto (0,85) existe para que só as previsões em que o modelo
+  está muito seguro cheguem a `acao_automatica`, limitando o risco de
+  liberar automaticamente um lote que devia ter sido revisado; o
+  limiar baixo (0,65) separa "revisão normal" de "revisão prioritária"
+  — abaixo dele, o próprio modelo está em dúvida real entre classes
+  (não é só "não é a mais confiante", é "as probabilidades estão
+  disputadas"), e esse caso merece fila prioritária de revisão humana,
+  não a mesma fila de um caso "quase automático". Os dois limiares
+  exatos estão testados em `tests/integration/test_api_ml.py`
+  (`TestCalibrarDecisao`), cobrindo as 3 faixas.
+
+### Subindo a API localmente
+
+Via ambiente virtual:
+
+```bash
+python -m pip install -r api_ml/requirements.txt
+uvicorn api_ml.main:app --reload --port 8001
+```
+
+Via Docker Compose (usa `api_ml/Dockerfile`, monta `./models` como
+volume somente-leitura e expõe a porta 8001 → 8000 do container):
+
+```bash
+docker compose up -d --build
+docker compose ps   # deve aparecer "healthy" depois do start_period (5s)
+docker compose down
+```
+
+### Testando `/predict` e `/health`
+
+```bash
+curl -X POST http://localhost:8001/predict -H "Content-Type: application/json" \
+  -d '{"lote_id": "L001", "status": "APROVADO", "turno": "A", "tem_observacao": false}'
+
+# turno inválido -> 422 (validação do Pydantic, não chega a consultar o modelo)
+curl -X POST http://localhost:8001/predict -H "Content-Type: application/json" \
+  -d '{"lote_id": "L002", "status": "APROVADO", "turno": "X", "tem_observacao": false}'
+
+curl http://localhost:8001/health
+```
+
+Se o `.pkl` estiver ausente ou corrompido, a API sobe normalmente (não
+derruba o processo): `/health` responde
+`{"status": "modelo_nao_carregado", "modelo_carregado": false, "erro": "..."}`
+e `/predict` responde **503** (não 500) — testado em
+`tests/integration/test_api_ml.py`.
+
+### `MLClient` e o fallback `REVISAO_ML_OFFLINE`
+
+`src/ml_client.py` é um cliente HTTP deliberadamente burro — não sabe o
+que é um `RegistroValidado` nem o que é "Ambíguo", só fala
+`POST {base_url}/predict`. Duas garantias:
+
+- **Nunca lança exceção**: timeout, erro de conexão, ou um 4xx/5xx do
+  `raise_for_status()` — tudo isso é capturado e o método devolve
+  `None`, nunca deixa a exceção subir para quem chamou.
+- **Circuit breaker**: depois de `max_falhas_consecutivas` falhas em
+  sequência (padrão: 5), o cliente para de tentar a rede e devolve
+  `None` imediatamente — sem empilhar timeouts de 3s por registro
+  quando a API está fora do ar. Um sucesso zera o contador. Não há
+  half-open automático por tempo; o reset é manual
+  (`ml_client.resetar_circuito()`) ou por reinício do processo.
+
+`src/item_processor.py` decide o que fazer com o resultado (ou a
+ausência dele): se `status_normalizado` do registro Ambíguo não tem
+correspondência clara com as 5 categorias do modelo
+(`STATUS_AMBIGUO_PARA_ML`), nem chega a chamar a API — fica Ambíguo para revisão humana,
+sem gastar uma chamada de rede. Se chama e a API não responde (`None`),
+o registro recebe `classe_ml = "REVISAO_ML_OFFLINE"` e o processamento
+do lote **continua** — a queda da API de ML nunca para o bot. Prova
+disso, de ponta a ponta (via `webapp/main.py` real, não só a função
+isolada): `tests/integration/test_resiliencia_api_ml_offline.py`.
+
+### Onde ver a auditoria
+
+- **Aba "Decisões de ML"** no `relatorio_conferencia_lotes.xlsx` (9ª
+  aba, só aparece quando o Excel é gerado com `decisoes_ml` — sempre o
+  caso via `webapp/main.py`): uma linha por registro Ambíguo, na mesma
+  ordem, com `Lote`, `Entrou no ML?`, `Classe (ML)`, `Probabilidade`,
+  `Nível de Confiança`, `Latência (ms)` e `Motivo`. O número de linhas
+  bate exatamente com a aba "Ambíguos" — testado nos Commits 5 e 6.
+- **Log estruturado** (`src/logging_estruturado.py`, logger
+  `"ml.decisoes"`): uma linha JSON por decisão processada, por exemplo:
+
+  ```json
+  {"timestamp": "2026-08-19T14:22:12.518450+00:00", "nivel": "INFO", "mensagem": "decisão de ML processada para o lote", "lote_id": "L001", "entrou_no_ml": true, "classe_ml": "revisar", "probabilidade_ml": 0.7123, "decisao_ml": "revisar", "latencia_ms": 12.34, "motivo": null}
+  ```
+
+Checklist final de aceite do exercício:
+[CHECKLIST_24A_ML.md](CHECKLIST_24A_ML.md).
