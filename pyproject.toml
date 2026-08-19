@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: testes rápidos e isolados de funções individuais",
+    "integration: testes de colaboração entre módulos (leitura + validação + relatório)",
+    "regression: protege bugs já corrigidos contra reintrodução silenciosa",
+    "e2e: fluxo completo das 10 abas ao relatório final (requer dataset real ou mock completo)",
+]

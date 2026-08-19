@@ -217,12 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local fixtures used for automated tests
-automation_fixtures/
+# Evidencias geradas em runtime na raiz do projeto (screenshots etc.).
+# Barra inicial: NÃO deve casar com docs/evidencias/, que é versionada
+# de propósito (ex.: relatório de cobertura da Aula 23).
+/evidencias/
 
-# Local evidence and generated output
-# these files are produced at runtime and should not be committed
-evidencias/
-
-# Bot — logs de execução
-logs/
+# Modelo de ML treinado (binário, regenerável via train_model.py) — ver
+# Exercício 24-A. models/.gitkeep continua versionado para preservar a pasta.
+models/*.pkl

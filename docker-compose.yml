@@ -1,16 +1,17 @@
-version: '3.8'
-
 services:
-  bot:
-    build: .
-    container_name: conferencia_bot
-    environment:
-      - EXECUTION_ID=${EXECUTION_ID:-local}
-      - BOT_ID=${BOT_ID:-conferencia_bot}
-    volumes:
-      - ./logs:/app/logs
-      - ./evidencias:/app/evidencias
-      - ./data/processed:/app/data/processed
+  api-ml:
+    build:
+      context: .
+      dockerfile: api_ml/Dockerfile
     ports:
-      - "8000:8000"
-    command: uvicorn webapp.main:app --host 0.0.0.0 --port 8000
+      - "8001:8000"
+    volumes:
+      - ./models:/app/models:ro
+    environment:
+      MODELO_PATH: /app/models/classificador_lotes.pkl
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
