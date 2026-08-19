@@ -56,7 +56,9 @@ tests/
 │   ├── test_validacao_lotes.py
 │   ├── test_aula22_classificacao.py
 │   ├── test_validacao_testcase.py        # unittest.TestCase com setUp/subTest
-│   └── test_classificacao_parametrize.py # parametrize com IDs descritivos
+│   ├── test_classificacao_parametrize.py # parametrize com IDs descritivos
+│   ├── test_operational_indicators.py    # os 10 indicadores operacionais (Aula 24)
+│   └── test_resumo_executivo.py          # texto do resumo_executivo.md (Aula 24)
 ├── integration/             # colaboração entre módulos
 │   ├── test_aula22_relatorio.py          # gera .xlsx em tmp_path
 │   └── test_webapp_aula22.py             # API via TestClient
@@ -100,8 +102,10 @@ python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=80
 ```
 
 O relatório de cobertura da última execução está em
-[`docs/evidencias/cobertura_aula23.txt`](docs/evidencias/cobertura_aula23.txt)
-— 99% de cobertura em `src/` (limiar exigido: 80%).
+[`docs/evidencias/cobertura_aula24.txt`](docs/evidencias/cobertura_aula24.txt)
+— 99% de cobertura em `src/` (limiar exigido: 80%). O snapshot da Aula 23
+fica preservado em
+[`docs/evidencias/cobertura_aula23.txt`](docs/evidencias/cobertura_aula23.txt).
 
 ### Markers disponíveis
 
@@ -135,7 +139,9 @@ do projeto:
 ```python
 from src.aula22_preprocessador import carregar_planilha_10dias
 from src.aula22_classificacao import classificar_lotes
+from src.operational_indicators import calcular_indicadores
 from src.aula22_relatorio import gerar_relatorio_aula22
+from src.resumo_executivo import gerar_resumo_executivo
 
 # 1. Lê as 10 abas diárias + a aba Base_Referencia do arquivo de entrada
 registros_por_dia, base_referencia = carregar_planilha_10dias(
@@ -145,8 +151,20 @@ registros_por_dia, base_referencia = carregar_planilha_10dias(
 # 2. Aplica as regras RN01-RN12 em cada registro, linha por linha
 registros = classificar_lotes(registros_por_dia, base_referencia)
 
-# 3. Gera o relatório final: 6 abas + dashboard nativo do Excel
-resultado = gerar_relatorio_aula22(registros, "relatorio_conferencia_lotes.xlsx")
+# 3. Calcula os 10 indicadores operacionais uma única vez — o mesmo
+#    objeto alimenta o Excel e o resumo executivo, para os dois nunca
+#    divergirem entre si.
+indicadores = calcular_indicadores(registros)
+
+# 4. Gera o relatório final: 8 abas + dashboard nativo do Excel
+resultado = gerar_relatorio_aula22(
+    registros, "relatorio_conferencia_lotes.xlsx", indicadores=indicadores
+)
+
+# 5. Gera o resumo executivo em Markdown, em linguagem de negócio
+texto_resumo_executivo = gerar_resumo_executivo(indicadores)
+with open("resumo_executivo.md", "w", encoding="utf-8") as arquivo:
+    arquivo.write(texto_resumo_executivo)
 
 print(resultado["resumo"])   # totais e percentuais por classificação
 print(resultado["log"])      # log de execução (data/hora, totais, dias processados)
@@ -158,8 +176,8 @@ E execute:
 python executar.py
 ```
 
-Ao final, `relatorio_conferencia_lotes.xlsx` estará na raiz do projeto,
-pronto para abrir no Excel.
+Ao final, `relatorio_conferencia_lotes.xlsx` e `resumo_executivo.md`
+estarão na raiz do projeto, prontos para abrir no Excel/editor de texto.
 
 ## Estrutura do projeto
 
@@ -172,7 +190,9 @@ src/
     observacao.py             # RN07 (observação obrigatória em lote reprovado)
   aula22_preprocessador.py    # lê a planilha de 10 dias e organiza os registros por dia
   aula22_classificacao.py     # motor de classificação: aplica RN01-RN12 e decide a categoria
-  aula22_relatorio.py         # gera o .xlsx de 6 abas + dashboard nativo
+  operational_indicators.py   # calcula os 10 indicadores operacionais (Aula 24) a partir dos registros
+  aula22_relatorio.py         # gera o .xlsx de 8 abas + dashboard nativo, a partir dos indicadores
+  resumo_executivo.py         # formata os mesmos indicadores como resumo_executivo.md
 
 tests/                        # unit/, integration/, e2e/ + conftest.py — ver seção "Testes"
 
@@ -252,10 +272,27 @@ print(CAMPOS_OBRIGATORIOS_LOTE)
   classificar uma única linha manualmente, mas o uso normal é via
   `classificar_lotes()`, que já processa todos os dias de uma vez.
 
+## Os indicadores operacionais (Aula 24)
+
+`calcular_indicadores()` (em `src/operational_indicators.py`) consolida
+a lista de registros classificados nos dez indicadores de negócio do
+dashboard executivo — total, válidos, divergências, ambíguos, erros de
+entrada (quantidade e %), a regra mais acionada, taxa de qualidade da
+entrada, taxa de revisão humana, taxa de retrabalho e o ganho estimado
+de tempo (uma **estimativa didática**, não uma medição real de
+produção — as premissas de tempo manual/automatizado usadas ficam
+explícitas no próprio objeto retornado).
+
+Esse objeto (`OperationalIndicators`) é calculado **uma única vez** e
+repassado tanto para `gerar_relatorio_aula22()` quanto para
+`gerar_resumo_executivo()` — garantindo que o Excel e o
+`resumo_executivo.md` nunca divirjam entre si por terem sido calculados
+separadamente.
+
 ## O relatório gerado
 
 `gerar_relatorio_aula22()` (em `src/aula22_relatorio.py`) produz um
-`.xlsx` com exatamente 6 abas, nesta ordem:
+`.xlsx` com exatamente 8 abas, nesta ordem:
 
 1. **Resumo** — a única aba que quem for usar o relatório no dia a dia
    realmente precisa olhar. Tem os indicadores numéricos (total e % de
@@ -270,6 +307,24 @@ print(CAMPOS_OBRIGATORIOS_LOTE)
    uma aba por categoria, cada uma contendo **só** a sua classificação
    (isso é verificado por teste: nenhuma aba pode misturar categorias
    diferentes).
+4. **Ranking de Regras** — as regras de divergência/ambiguidade/erro que
+   apareceram no período, da mais para a menos frequente (RN08/Válido
+   não entra aqui — ela não representa um problema).
+5. **Dicionário** — o significado de cada código de regra (RN01–RN12),
+   para quem lê o relatório sem o enunciado das RNs em mãos.
+
+## O resumo executivo (`resumo_executivo.md`)
+
+`gerar_resumo_executivo()` (em `src/resumo_executivo.py`) recebe o mesmo
+`OperationalIndicators` do Excel e devolve um texto em Markdown, em
+linguagem de negócio (sem nomes de função, classe, coluna ou código de
+regra "solto"), com cinco seções: **Visão Geral**, **Indicadores
+Principais**, **Destaque** (a regra mais acionada, pelo nome legível —
+ou uma nota explícita de que nenhum problema ocorreu no período),
+**Ganho Estimado de Tempo** (com as premissas usadas) e **Observação**
+(deixando claro que o ganho é uma estimativa didática). A função só
+devolve a string — quem chama decide se grava em disco, devolve pela
+API, ou os dois.
 
 ## O dataset real e o gabarito
 
@@ -316,13 +371,17 @@ curl -o relatorio_conferencia_lotes.xlsx \
 
 # 3. (opcional) consulta o log de execução em texto puro
 curl http://127.0.0.1:8000/api/aula22/dashboard/<id>/log
+
+# 4. (opcional) consulta o resumo executivo em Markdown
+curl http://127.0.0.1:8000/api/aula22/dashboard/<id>/resumo-executivo
 ```
 
 | Método | Rota | Faz o quê |
 |--------|------|-----------|
 | `POST` | `/api/aula22/dashboard` | Recebe o upload (`.xlsx`/`.xls`), classifica e já gera o relatório. Devolve `id`, `total`, `por_classificacao`, `percentual` e `evolucao_por_dia`. |
-| `GET` | `/api/aula22/dashboard/{id}/download` | Devolve o `.xlsx` de 6 abas + dashboard, pelo `id` retornado no passo anterior. |
+| `GET` | `/api/aula22/dashboard/{id}/download` | Devolve o `.xlsx` de 8 abas + dashboard, pelo `id` retornado no passo anterior. |
 | `GET` | `/api/aula22/dashboard/{id}/log` | Devolve o log de execução (texto puro): data/hora, totais por classificação, dias processados. |
+| `GET` | `/api/aula22/dashboard/{id}/resumo-executivo` | Devolve o `resumo_executivo.md` (texto puro, Markdown), calculado a partir do mesmo `OperationalIndicators` do Excel. |
 
 O arquivo gerado fica num diretório temporário do sistema, associado ao
 `id` num dicionário em memória — válido enquanto o processo do servidor
@@ -335,4 +394,4 @@ build step) chama esses três endpoints pelo navegador — abra
 identidade da LG (vermelho `#A50034`), com blobs suaves e cantos bem
 arredondados.
 
-Testes em [tests/test_webapp_aula22.py](tests/test_webapp_aula22.py).
+Testes em [tests/integration/test_webapp_aula22.py](tests/integration/test_webapp_aula22.py).
