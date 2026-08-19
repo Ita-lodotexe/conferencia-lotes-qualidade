@@ -6,10 +6,12 @@ acesso ao Workbook — não há gancho para inserir gráficos nativos. Aqui
 abrimos o Workbook do openpyxl diretamente para poder usar
 openpyxl.chart.DoughnutChart e LineChart.
 
-Produz exatamente 6 abas, cada uma só com a sua categoria (nenhuma
-mistura Divergência/Ambíguo, conforme o critério de aceite):
+Produz exatamente 8 abas — as 6 tabelas por categoria (nenhuma mistura
+Divergência/Ambíguo, conforme o critério de aceite) mais 2 abas de
+apoio derivadas dos indicadores operacionais (Aula 24):
 
     Resumo | Todos | Válidos | Divergências | Ambíguos | Erros de Entrada
+    | Ranking de Regras | Dicionário
 
 E devolve também o texto do log de execução (RN de evidência da Aula 1),
 que o chamador decide se grava como .txt, retorna na API, ou ambos.
@@ -36,6 +38,11 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from src.aula22_classificacao import RegistroValidado
+from src.operational_indicators import (
+    REGRAS_DESCRICAO,
+    OperationalIndicators,
+    calcular_indicadores,
+)
 
 logger = logging.getLogger("aula22.relatorio")
 
@@ -139,11 +146,19 @@ def _rotacionar_rotulos_eixo(eixo, graus: int = -45) -> None:
     eixo.txPr = RichText(bodyPr=propriedades_corpo, p=[paragrafo])
 
 
-def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> None:
+def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado], indicadores: OperationalIndicators) -> None:
+    """Os números desta aba vêm de `indicadores` (já calculados por
+    calcular_indicadores), nunca recontados aqui — a mesma regra que
+    protege o resumo_executivo.md contra divergir do Excel (ver módulo
+    src/operational_indicators.py)."""
     ws = wb.create_sheet("Resumo", 0)  # sempre a primeira aba
 
-    total = len(registros)
-    contagem = Counter(r.classificacao for r in registros)
+    contagem_por_classe = {
+        "Válido": indicadores.qtd_validos,
+        "Divergência": indicadores.qtd_divergencias,
+        "Ambíguo": indicadores.qtd_ambiguos,
+        "Erro de Entrada": indicadores.qtd_erros_entrada,
+    }
 
     ws["A1"] = "Relatório de Conferência de Lotes — Resumo Executivo"
     ws["A1"].font = Font(bold=True, size=14)
@@ -154,11 +169,11 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     cabecalhos = ["Total de registros", "Válidos", "% Válidos", "Divergências", "% Divergências",
                   "Ambíguos", "% Ambíguos", "Erros de Entrada", "% Erros de Entrada"]
     valores = [
-        total,
-        contagem["Válido"], round(100 * contagem["Válido"] / total, 1) if total else 0,
-        contagem["Divergência"], round(100 * contagem["Divergência"] / total, 1) if total else 0,
-        contagem["Ambíguo"], round(100 * contagem["Ambíguo"] / total, 1) if total else 0,
-        contagem["Erro de Entrada"], round(100 * contagem["Erro de Entrada"] / total, 1) if total else 0,
+        indicadores.total_registros,
+        indicadores.qtd_validos, round(indicadores.pct_validos, 1),
+        indicadores.qtd_divergencias, round(indicadores.pct_divergencias, 1),
+        indicadores.qtd_ambiguos, round(indicadores.pct_ambiguos, 1),
+        indicadores.qtd_erros_entrada, round(indicadores.pct_erros_entrada, 1),
     ]
     linha_cabecalho = 4
     for indice, (cab, val) in enumerate(zip(cabecalhos, valores), start=1):
@@ -178,7 +193,7 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     classes_ordem = ["Válido", "Divergência", "Ambíguo", "Erro de Entrada"]
     for offset, classe in enumerate(classes_ordem, start=1):
         ws.cell(row=linha_base_rosca + offset, column=1, value=classe)
-        ws.cell(row=linha_base_rosca + offset, column=2, value=contagem[classe])
+        ws.cell(row=linha_base_rosca + offset, column=2, value=contagem_por_classe[classe])
 
     rosca = DoughnutChart()
     rosca.title = "Distribuição por classificação"
@@ -262,32 +277,107 @@ def _escrever_aba_resumo(wb: Workbook, registros: list[RegistroValidado]) -> Non
     ws.column_dimensions["A"].width = 20
 
 
-def gerar_relatorio_aula22(registros: list[RegistroValidado], caminho_saida: str) -> dict:
-    """Gera o .xlsx de 6 abas + dashboard nativo e devolve um resumo em memória.
+def _escrever_aba_ranking_regras(wb: Workbook, indicadores: OperationalIndicators) -> None:
+    """Aba de apoio ao indicador 6 (regra mais acionada): todas as regras
+    de divergência/ambiguidade/erro que apareceram no período, da mais
+    para a menos frequente. RN08 (Válido) não entra aqui pelo mesmo motivo
+    documentado em calcular_indicadores() — ela não é um problema a apontar.
+    """
+    ws = wb.create_sheet("Ranking de Regras")
+    ws.append(["Código", "Regra", "Quantidade", "% do total"])
+    for celula in ws[1]:
+        celula.font = Font(bold=True, color=COR_TEXTO_CABECALHO)
+        celula.fill = PatternFill("solid", fgColor=COR_CABECALHO)
+        celula.alignment = Alignment(horizontal="center")
+
+    total = indicadores.total_registros
+    for codigo, quantidade in indicadores.ranking_regras:
+        nome = REGRAS_DESCRICAO.get(codigo, codigo)
+        percentual = round(100 * quantidade / total, 1) if total else 0
+        ws.append([codigo, nome, quantidade, percentual])
+
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 55
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 14
+    ws.freeze_panes = "A2"
+    if indicadores.ranking_regras:
+        ws.auto_filter.ref = f"A1:D{len(indicadores.ranking_regras) + 1}"
+
+
+def _escrever_aba_dicionario(wb: Workbook) -> None:
+    """Aba de referência fixa: o significado de cada código de regra (RN)
+    que pode aparecer na coluna "regra" das demais abas — para quem lê o
+    relatório sem ter o enunciado das RNs em mãos.
+    """
+    ws = wb.create_sheet("Dicionário")
+    ws.append(["Código", "Descrição"])
+    for celula in ws[1]:
+        celula.font = Font(bold=True, color=COR_TEXTO_CABECALHO)
+        celula.fill = PatternFill("solid", fgColor=COR_CABECALHO)
+        celula.alignment = Alignment(horizontal="center")
+
+    for codigo, descricao in REGRAS_DESCRICAO.items():
+        ws.append([codigo, descricao])
+
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 70
+    ws.freeze_panes = "A2"
+
+
+def gerar_relatorio_aula22(
+    registros: list[RegistroValidado],
+    caminho_saida: str,
+    indicadores: OperationalIndicators | None = None,
+) -> dict:
+    """Gera o .xlsx de 8 abas + dashboard nativo e devolve um resumo em memória.
+
+    Args:
+        registros: lista de RegistroValidado já classificados.
+        caminho_saida: caminho do .xlsx a ser gravado.
+        indicadores: OperationalIndicators já calculado a partir dos mesmos
+            `registros` (ver src/operational_indicators.py). Se não for
+            informado, é calculado aqui — mas o padrão esperado pelo
+            chamador (webapp/main.py) é calcular uma única vez e passar
+            adiante, para o Excel e o resumo_executivo.md nascerem do
+            mesmo objeto e nunca divergirem entre si.
 
     Returns:
         dict com "resumo" (contagens/percentuais), "arquivo" (caminho) e
         "log" (texto do log de execução, seção 5.4 do enunciado).
     """
+    if indicadores is None:
+        indicadores = calcular_indicadores(registros)
+
     wb = Workbook()
     wb.remove(wb.active)  # remove a aba default "Sheet"
 
-    _escrever_aba_resumo(wb, registros)
+    _escrever_aba_resumo(wb, registros, indicadores)
     _escrever_aba_tabela(wb, "Todos", _dataframe_por_classificacao(registros, None))
     for classificacao, nome_aba in NOMES_ABA.items():
         if classificacao in ("Resumo", "Todos"):
             continue
         _escrever_aba_tabela(wb, nome_aba, _dataframe_por_classificacao(registros, classificacao))
+    _escrever_aba_ranking_regras(wb, indicadores)
+    _escrever_aba_dicionario(wb)
 
     wb.save(caminho_saida)
     logger.info("Relatório salvo em %s", caminho_saida)
 
-    contagem = Counter(r.classificacao for r in registros)
-    total = len(registros)
     resumo = {
-        "total": total,
-        "por_classificacao": dict(contagem),
-        "percentual": {k: round(100 * v / total, 1) if total else 0 for k, v in contagem.items()},
+        "total": indicadores.total_registros,
+        "por_classificacao": {
+            "Válido": indicadores.qtd_validos,
+            "Divergência": indicadores.qtd_divergencias,
+            "Ambíguo": indicadores.qtd_ambiguos,
+            "Erro de Entrada": indicadores.qtd_erros_entrada,
+        },
+        "percentual": {
+            "Válido": round(indicadores.pct_validos, 1),
+            "Divergência": round(indicadores.pct_divergencias, 1),
+            "Ambíguo": round(indicadores.pct_ambiguos, 1),
+            "Erro de Entrada": round(indicadores.pct_erros_entrada, 1),
+        },
         "evolucao_por_dia": _serie_evolucao_por_dia(registros),
     }
 

@@ -1,4 +1,4 @@
-"""Testes de `src/aula22_relatorio.py` — geração do .xlsx de 6 abas + dashboard.
+"""Testes de `src/aula22_relatorio.py` — geração do .xlsx de 8 abas + dashboard.
 
 Usa uma lista sintética de RegistroValidado (não depende do dataset real
 de 10 dias) para validar a estrutura exigida pelo critério de aceite:
@@ -14,6 +14,7 @@ import pytest
 
 from src.aula22_classificacao import RegistroValidado
 from src.aula22_relatorio import NOMES_ABA, gerar_relatorio_aula22
+from src.operational_indicators import calcular_indicadores
 
 pytestmark = pytest.mark.integration
 
@@ -53,12 +54,64 @@ def registros():
     ]
 
 
-def test_gera_6_abas_com_nomes_e_ordem_corretos(tmp_path, registros):
+def test_gera_8_abas_com_nomes_e_ordem_corretos(tmp_path, registros):
     caminho = tmp_path / "relatorio_conferencia_lotes.xlsx"
     gerar_relatorio_aula22(registros, str(caminho))
 
     wb = openpyxl.load_workbook(caminho)
-    assert wb.sheetnames == ["Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada"]
+    assert wb.sheetnames == [
+        "Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada",
+        "Ranking de Regras", "Dicionário",
+    ]
+
+
+def test_aba_ranking_de_regras_reflete_o_ranking_de_indicadores(tmp_path, registros):
+    caminho = tmp_path / "relatorio.xlsx"
+    indicadores = calcular_indicadores(registros)
+    gerar_relatorio_aula22(registros, str(caminho), indicadores=indicadores)
+
+    wb = openpyxl.load_workbook(caminho)
+    ws = wb["Ranking de Regras"]
+    linhas = [
+        (ws.cell(row=r, column=1).value, ws.cell(row=r, column=3).value)
+        for r in range(2, ws.max_row + 1)
+    ]
+    assert linhas == indicadores.ranking_regras
+    # RN08 (Válido) não é uma regra "acionada" no sentido de problema — não deve aparecer
+    assert "RN08" not in [codigo for codigo, _ in linhas]
+
+
+def test_aba_dicionario_lista_todas_as_regras_conhecidas(tmp_path, registros):
+    from src.operational_indicators import REGRAS_DESCRICAO
+
+    caminho = tmp_path / "relatorio.xlsx"
+    gerar_relatorio_aula22(registros, str(caminho))
+
+    wb = openpyxl.load_workbook(caminho)
+    ws = wb["Dicionário"]
+    dicionario_lido = {
+        ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value
+        for r in range(2, ws.max_row + 1)
+    }
+    assert dicionario_lido == REGRAS_DESCRICAO
+
+
+def test_gerar_relatorio_usa_indicadores_informado_sem_recalcular(tmp_path, registros):
+    """Passar um `indicadores` já calculado não deve gerar um segundo
+    cálculo divergente — a aba Resumo e o dict "resumo" devem refletir
+    exatamente o objeto informado, mesmo que ele tenha sido calculado
+    com premissas de tempo diferentes do padrão."""
+    caminho = tmp_path / "relatorio.xlsx"
+    indicadores = calcular_indicadores(
+        registros, tempo_manual_min_por_registro=10.0, tempo_automatizado_min_por_registro=1.0,
+    )
+    resultado = gerar_relatorio_aula22(registros, str(caminho), indicadores=indicadores)
+
+    assert resultado["resumo"]["total"] == indicadores.total_registros
+    assert resultado["resumo"]["por_classificacao"]["Válido"] == indicadores.qtd_validos
+
+    wb = openpyxl.load_workbook(caminho)
+    assert wb["Resumo"]["A5"].value == indicadores.total_registros
 
 
 @pytest.mark.regression

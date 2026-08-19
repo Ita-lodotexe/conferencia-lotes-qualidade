@@ -63,7 +63,7 @@ def test_post_dashboard_retorna_resumo_com_id(upload_ok):
     assert "id" in corpo
 
 
-def test_download_devolve_xlsx_com_6_abas(upload_ok):
+def test_download_devolve_xlsx_com_8_abas(upload_ok):
     resposta_post = client.post("/api/aula22/dashboard", files=upload_ok)
     dashboard_id = resposta_post.json()["id"]
 
@@ -73,7 +73,10 @@ def test_download_devolve_xlsx_com_6_abas(upload_ok):
     assert resposta.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
-    assert wb.sheetnames == ["Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada"]
+    assert wb.sheetnames == [
+        "Resumo", "Todos", "Válidos", "Divergências", "Ambíguos", "Erros de Entrada",
+        "Ranking de Regras", "Dicionário",
+    ]
 
 
 def test_log_devolve_texto_da_execucao(upload_ok):
