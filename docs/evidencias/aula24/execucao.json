@@ -1,0 +1,45 @@
+{
+  "dataset": "sintético (10 dias, gerado para fins de evidência — o dataset real inspecao_lotes_10dias.xlsx não é distribuído no repositório)",
+  "total_registros": 62,
+  "por_classificacao": {
+    "Válido": 35,
+    "Divergência": 21,
+    "Ambíguo": 3,
+    "Erro de Entrada": 3
+  },
+  "percentual": {
+    "Válido": 56.5,
+    "Divergência": 33.9,
+    "Ambíguo": 4.8,
+    "Erro de Entrada": 4.8
+  },
+  "regra_mais_acionada": "RN05",
+  "regra_mais_acionada_nome": "Lote não cadastrado ou inativo na Base_Referencia",
+  "regra_mais_acionada_qtd": 16,
+  "taxa_qualidade_entrada": 95.2,
+  "taxa_revisao_humana": 4.8,
+  "taxa_retrabalho": 33.9,
+  "ganho_estimado_minutos": 173.6,
+  "tempo_manual_min_por_registro": 3.0,
+  "tempo_automatizado_min_por_registro": 0.2,
+  "ranking_regras": [
+    [
+      "RN05",
+      16
+    ],
+    [
+      "RN10",
+      5
+    ],
+    [
+      "RN09",
+      3
+    ],
+    [
+      "RN01-RN04",
+      3
+    ]
+  ],
+  "arquivo_excel": "docs/evidencias/aula24/relatorio_conferencia_lotes.xlsx",
+  "arquivo_resumo_executivo": "docs/evidencias/aula24/resumo_executivo.md"
+}
