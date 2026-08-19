@@ -36,6 +36,19 @@ O ruído é proposital: um classificador que acertasse 100% estaria só
 decorando a regra de geração, não aprendendo um padrão estatístico —
 o que seria inútil como exercício de ML.
 
+Distribuição de status_raw (não é uniforme): 45% APROVADO, 30%
+REPROVADO, 10% PENDENTE, 8% EM_AJUSTE, 7% CANCELADO
+(`PESOS_STATUS_RAW`). Reflete o domínio — a maioria dos lotes chega a
+uma decisão fechada (aprovado ou reprovado), e só uma minoria fica em
+um estado transitório (pendente/em ajuste/cancelado). Isso também é o
+que torna o problema aprendível dentro da meta de acurácia do
+exercício (>70%): como PENDENTE/EM_AJUSTE/CANCELADO têm o sinal mais
+fraco (60% revisar, 40% "errado" mesmo na regra geradora), uma
+distribuição uniforme entre os 5 status daria peso demais a esse caso
+ambíguo e limitaria a acurácia máxima teoricamente atingível (mesmo
+por um classificador perfeito) a cerca de 67% — abaixo da meta. Com os
+pesos acima, esse teto sobe para ~74%.
+
 Reprodutibilidade: numpy.random.seed(42) fixa tanto a geração do
 dataset quanto o split treino/teste e o RandomForestClassifier.
 
@@ -71,6 +84,10 @@ STATUS_REPROVADO = 1
 STATUS_PENDENTE = 2
 # 3 = EM_AJUSTE, 4 = CANCELADO — tratados junto com PENDENTE (status_raw >= 2)
 
+# 45% APROVADO, 30% REPROVADO, 10% PENDENTE, 8% EM_AJUSTE, 7% CANCELADO —
+# ver docstring do módulo para o porquê de não ser uniforme entre os 5 valores.
+PESOS_STATUS_RAW = [0.45, 0.30, 0.10, 0.08, 0.07]
+
 
 def _probabilidades_para(status_raw: int, tem_obs: int) -> list[float]:
     """Distribuição de probabilidade das 3 classes, dado o status e a observação.
@@ -91,7 +108,7 @@ def gerar_dataset(n_amostras: int = N_AMOSTRAS) -> pd.DataFrame:
     """Gera `n_amostras` linhas sintéticas de (status_raw, turno, tem_obs, classe)."""
     linhas = []
     for _ in range(n_amostras):
-        status_raw = np.random.randint(0, 5)  # 0..4
+        status_raw = np.random.choice(5, p=PESOS_STATUS_RAW)  # 0..4, não uniforme
         turno = np.random.randint(0, 3)       # 0..2
         tem_obs = np.random.randint(0, 2)     # 0 ou 1
 

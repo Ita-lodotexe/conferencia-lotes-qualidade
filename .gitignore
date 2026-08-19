@@ -221,3 +221,7 @@ __marimo__/
 # Barra inicial: NÃO deve casar com docs/evidencias/, que é versionada
 # de propósito (ex.: relatório de cobertura da Aula 23).
 /evidencias/
+
+# Modelo de ML treinado (binário, regenerável via train_model.py) — ver
+# Exercício 24-A. models/.gitkeep continua versionado para preservar a pasta.
+models/*.pkl
