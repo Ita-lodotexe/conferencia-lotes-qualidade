@@ -1,0 +1,5 @@
+{
+  "name": "italo-dispatcher-v1",
+  "projectType": "PYTHON",
+  "main": "bot.py"
+}
