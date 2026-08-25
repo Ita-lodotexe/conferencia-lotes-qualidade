@@ -225,3 +225,26 @@ __marimo__/
 # Modelo de ML treinado (binário, regenerável via train_model.py) — ver
 # Exercício 24-A. models/.gitkeep continua versionado para preservar a pasta.
 models/*.pkl
+
+# === Segurança de Credenciais e Pacotes Maestro (S10-B) ===
+**/.env
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Ambientes virtuais
+venv/
+venvs/
+.venv/
+env/
+ENV/
+
+# Pacotes zip gerados para deploy
+*.zip
+dist/
+deploy/**/*.zip
+
+# Arquivos gerados em runtime na pasta output
+data/output/*
+!data/output/.gitkeep
