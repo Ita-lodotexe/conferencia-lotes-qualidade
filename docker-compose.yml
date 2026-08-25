@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   webapp:
     build: .
@@ -37,3 +35,20 @@ services:
     depends_on:
       - webapp
     command: python web_automation.py
+
+  api-ml:
+    build:
+      context: .
+      dockerfile: api_ml/Dockerfile
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./models:/app/models:ro
+    environment:
+      MODELO_PATH: /app/models/classificador_lotes.pkl
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
