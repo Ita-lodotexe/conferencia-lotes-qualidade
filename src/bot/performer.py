@@ -1,13 +1,16 @@
-"""
-Performer: consome FilaAuditoriaLotes-Eqp04, aplica RN01-RN07 em cada
-item, e posta resumo como artefato no Maestro.
+"""Bot B — Performer (Auditoria e Validação de Lotes via Regras de Negócio).
 
-Uso:
-    python -m src.bot.performer
-
-Depende de: MAESTRO_ENABLED, VAULT_ENABLED, BOTCITY_ACTIVITY_LABEL,
-credenciais Maestro no .env.
+Responsabilidades:
+1. Obtém credenciais seguras do ERP via Credentials Vault (src/bot/vault_client.py).
+2. Carrega a base de referência de lotes cadastrados (RN03).
+3. Consome itens da fila (DataPool) do Maestro.
+4. Aplica as regras de negócio RN01 a RN07 (src/bot/avaliador.py).
+5. Registra o status de cada item (report_done / report_error com ErrorType.BUSINESS/SYSTEM).
+6. Dispara o Bot C (Reporter) via sdk.create_task() para consolidação e alertas.
+7. Finaliza a task do Performer no Maestro.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -15,320 +18,229 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-
 import pandas as pd
 
 from src.bot import config
 from src.bot.bot import setup_logger
-from src.bot.vault_client import VaultError, obter_credencial_erp
+from src.bot.vault_client import obter_credencial_erp, VaultError
+from src.bot.avaliador import avaliar_lote
+from src.classificador_divergencia import classificar_divergencia
 from src.modules.validacao import COLUNAS_ESPERADAS
 from src.modules.verificacao_lotes import carregar_base_referencia
-from src.relatorio import avaliar_lote
 
 try:
     from botcity.maestro import (
-        AlertType,
         AutomationTaskFinishStatus,
         BotMaestroSDK,
         ErrorType,
     )
 except ImportError:
-    AlertType = None
-    AutomationTaskFinishStatus = None
     BotMaestroSDK = None
+    AutomationTaskFinishStatus = None
     ErrorType = None
-
-DATAPOOL_LABEL = "FilaAuditoriaLotes-Eqp04"
-ARQUIVO_CSV = "lotes_auditoria.csv"  # dentro de PASTA_ENTRADA, usado no dry-run
-
-# Caminho único da base de referência, gerado pelo preprocessor
-# (scripts/planilha_para_csv.py) a partir da planilha oficial.
-BASE_REFERENCIA = "data/processed/base_lotes_referencia.csv"
-
-REGRAS_CONTABILIZADAS = ["RN02", "RN03", "RN06", "RN07"]
 
 
 class PerformerError(Exception):
-    """Erros do Performer com mensagem sanitizada (sem dados do SDK)."""
+    """Exceção levantada para erros no fluxo do Bot B Performer."""
 
 
-def _novo_resumo() -> dict:
-    return {
+def carregar_base_dados_referencia() -> pd.DataFrame:
+    """Carrega a base de referência de lotes."""
+    caminho = Path(config.CAMINHO_BASE_REFERENCIA)
+    if not caminho.is_file():
+        # Tenta caminhos alternativos conhecidos no projeto
+        alternativas = [
+            Path("data/processed/base_lotes_referencia.csv"),
+            Path("data/dev/base_lotes_referencia_dev.csv"),
+        ]
+        for alt in alternativas:
+            if alt.is_file():
+                caminho = alt
+                break
+
+    return carregar_base_referencia(str(caminho))
+
+
+def disparar_bot_c(sdk: BotMaestroSDK | None, dados_resumo: dict) -> str | None:
+    """Dispara a execução do Bot C (Reporter) via Maestro create_task()."""
+    if not config.MAESTRO_ENABLED or sdk is None:
+        logging.info(f"[DRY-RUN ORQUESTRAÇÃO] Bot B disparando Bot C ('{config.BOTCITY_REPORTER_LABEL}').")
+        return "task-mock-reporter-001"
+
+    try:
+        task_c = sdk.create_task(
+            activity_label=config.BOTCITY_REPORTER_LABEL,
+            parameters={
+                "origem": "bot_b_performer",
+                "total_processados": dados_resumo.get("total_processados", 0),
+                "total_divergencias": dados_resumo.get("total_com_divergencia", 0),
+            },
+        )
+        task_c_id = str(task_c.id)
+        logging.info(f"Bot B disparou com sucesso o Bot C (Task ID: {task_c_id}, Activity: {config.BOTCITY_REPORTER_LABEL}).")
+        return task_c_id
+    except Exception as e:
+        logging.error(f"Falha ao criar task do Bot C no Maestro: {e}")
+        # Alerta sem quebrar o Performer
+        return None
+
+
+def executar_auditoria_local(base_ref: pd.DataFrame) -> dict:
+    """Executa o processamento em modo local / dry-run."""
+    caminho_csv = Path(config.PASTA_ENTRADA) / config.ARQUIVO_CSV_ENTRADA
+    if not caminho_csv.is_file():
+        caminho_csv = Path("data/processed/dados_relatorio.csv")
+
+    df = pd.read_csv(caminho_csv, dtype=str, keep_default_na=False)
+    resumo = {
         "total_processados": 0,
         "total_conformes": 0,
         "total_com_divergencia": 0,
-        "total_erros_sistema": 0,
-        "divergencias_por_regra": {regra: 0 for regra in REGRAS_CONTABILIZADAS},
+        "divergencias_detalhadas": [],
     }
 
-
-def _contabilizar_divergencias(resumo: dict, divergencias: list[dict]) -> None:
-    for divergencia in divergencias:
-        regra = divergencia["regra"]
-        resumo["divergencias_por_regra"][regra] = (
-            resumo["divergencias_por_regra"].get(regra, 0) + 1
-        )
-
-
-def _logar_resumo(resumo: dict) -> None:
-    logging.info(
-        f"Performer concluído: {resumo['total_processados']} processados, "
-        f"{resumo['total_conformes']} conformes, "
-        f"{resumo['total_com_divergencia']} com divergência, "
-        f"{resumo['total_erros_sistema']} erros de sistema."
-    )
-    logging.info(f"Divergências por regra: {resumo['divergencias_por_regra']}")
-
-
-def _emitir_alerta_maestro(titulo: str, mensagem: str) -> None:
-    """Registra um alerta no Maestro, sem nunca propagar exceção.
-
-    O endpoint de alerta exige uma AutomationTask real (verificado
-    empiricamente: task inexistente devolve 404), por isso o alerta cria
-    uma task própria e a encerra como FAILED — assim a ocorrência fica
-    visível no painel mesmo quando o Performer aborta antes do loop.
-    """
-    if not config.MAESTRO_ENABLED or BotMaestroSDK is None:
-        return
-
-    try:
-        sdk = BotMaestroSDK(
-            server=config.BOTCITY_SERVER,
-            login=config.BOTCITY_LOGIN,
-            key=config.BOTCITY_KEY,
-        )
-        sdk.login()
-        task = sdk.create_task(
-            activity_label=config.BOTCITY_ACTIVITY_LABEL,
-            parameters={"origem": "performer_local", "alerta": titulo},
-        )
-        sdk.alert(
-            task_id=str(task.id),
-            title=titulo,
-            message=mensagem,
-            alert_type=AlertType.ERROR,
-        )
-        sdk.finish_task(
-            task_id=str(task.id),
-            status=AutomationTaskFinishStatus.FAILED,
-            message=mensagem,
-        )
-        logging.info(f"Alerta registrado no Maestro (task {task.id}).")
-    except Exception as e:
-        logging.warning(f"Não foi possível registrar alerta no Maestro (tipo: {type(e).__name__}).")
-
-
-def _finalizar_task_com_falha(sdk, task_id, mensagem: str) -> None:
-    """Encerra a task como FAILED para não deixá-la órfã. Nunca levanta."""
-    try:
-        sdk.finish_task(
-            task_id=str(task_id),
-            status=AutomationTaskFinishStatus.FAILED,
-            message=mensagem,
-        )
-    except Exception as e:
-        logging.warning(f"Falha ao finalizar task {task_id} (tipo: {type(e).__name__}).")
-
-
-def _executar_dry_run(base_ref: pd.DataFrame) -> int:
-    """Consome o CSV local diretamente, sem tocar em fila nem task."""
-    logging.info("Modo dry-run (MAESTRO_ENABLED=false): consumindo CSV local, sem Maestro.")
-
-    csv_path = os.path.join(config.PASTA_ENTRADA, ARQUIVO_CSV)
-    if not os.path.isfile(csv_path):
-        logging.error(f"CSV de entrada não encontrado: {csv_path}")
-        return 1
-
-    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
-    resumo = _novo_resumo()
-
     for i, linha in df.reset_index(drop=True).iterrows():
-        lote = {coluna: linha.get(coluna, "") for coluna in COLUNAS_ESPERADAS}
+        lote = {col: linha.get(col, "") for col in COLUNAS_ESPERADAS}
         resumo["total_processados"] += 1
 
-        try:
-            divergencias = avaliar_lote(lote, base_ref)
-        except Exception as e:
-            logging.error(
-                f"[DRY-RUN] Erro avaliando lote_id='{lote['lote_id']}' (tipo: {type(e).__name__})."
-            )
-            resumo["total_erros_sistema"] += 1
-            continue
-
+        divergencias = avaliar_lote(lote, base_ref)
         if not divergencias:
             resumo["total_conformes"] += 1
-            logging.info(f"[DRY-RUN] Item {i + 1}/{len(df)}: lote_id='{lote['lote_id']}' conforme.")
+            logging.info(f"[DRY-RUN] Lote '{lote['lote_id']}': CONFORME")
         else:
             resumo["total_com_divergencia"] += 1
-            _contabilizar_divergencias(resumo, divergencias)
-            regras = ",".join(d["regra"] for d in divergencias)
-            logging.warning(
-                f"[DRY-RUN] Item {i + 1}/{len(df)}: lote_id='{lote['lote_id']}' "
-                f"com divergências: {regras}"
-            )
+            regras = ", ".join(d["regra"] for d in divergencias)
+            logging.warning(f"[DRY-RUN] Lote '{lote['lote_id']}': DIVERGÊNCIA ({regras})")
+            classif_ml = classificar_divergencia(lote.get("observacao", ""))
+            for div in divergencias:
+                resumo["divergencias_detalhadas"].append({
+                    "linha": i + 2,
+                    "lote_id": lote["lote_id"],
+                    "origem_decisao": classif_ml["origem_decisao"],
+                    "confianca_ml": classif_ml["confianca_ml"],
+                    "causa_provavel": classif_ml["causa_provavel"],
+                    **div,
+                })
 
-    _logar_resumo(resumo)
-    return 0
+    return resumo
 
 
-def _executar_com_maestro(base_ref: pd.DataFrame) -> int:
-    """Fluxo real: login, task, consumo da fila, artefato e finalização."""
-    if BotMaestroSDK is None:
-        raise PerformerError("SDK botcity-maestro-sdk não está instalado.")
+def executar_auditoria_maestro(sdk: BotMaestroSDK, base_ref: pd.DataFrame) -> dict:
+    """Executa o processamento consumindo a fila do BotCity Maestro."""
+    # Cria a task de execução do Performer
+    task = sdk.create_task(
+        activity_label=config.BOTCITY_PERFORMER_LABEL,
+        parameters={"origem": "orquestracao_performer", "datapool": config.DATAPOOL_LABEL},
+    )
+    task_id = str(task.id)
+    logging.info(f"Task iniciada no Maestro: ID {task_id}")
 
-    try:
-        sdk = BotMaestroSDK(
-            server=config.BOTCITY_SERVER,
-            login=config.BOTCITY_LOGIN,
-            key=config.BOTCITY_KEY,
-        )
-        sdk.login()
-    except Exception as e:
-        logging.error(f"Falha no login do Maestro (tipo: {type(e).__name__}).")
-        raise PerformerError("Falha ao autenticar no Maestro.") from None
-
-    # A task real é obrigatória: artefato e alerta são anexados a ela e o
-    # servidor rejeita identificadores inexistentes.
-    try:
-        task = sdk.create_task(
-            activity_label=config.BOTCITY_ACTIVITY_LABEL,
-            parameters={"origem": "performer_local", "datapool": DATAPOOL_LABEL},
-        )
-        task_id = task.id
-        logging.info(f"Task criada no Maestro: id={task_id}")
-    except Exception as e:
-        logging.error(f"Falha ao criar task (tipo: {type(e).__name__}).")
-        raise PerformerError("Falha ao criar task no Maestro.") from None
-
-    try:
-        datapool = sdk.get_datapool(label=DATAPOOL_LABEL)
-    except Exception as e:
-        logging.error(f"Falha ao obter DataPool (tipo: {type(e).__name__}).")
-        _finalizar_task_com_falha(sdk, task_id, "Falha ao obter DataPool")
-        raise PerformerError(f"Falha ao obter DataPool {DATAPOOL_LABEL}.") from None
-
-    resumo = _novo_resumo()
-    resumo["task_id"] = task_id
-    resumo["activity_label"] = config.BOTCITY_ACTIVITY_LABEL
+    datapool = sdk.get_datapool(label=config.DATAPOOL_LABEL)
+    resumo = {
+        "task_id": task_id,
+        "total_processados": 0,
+        "total_conformes": 0,
+        "total_com_divergencia": 0,
+        "divergencias_detalhadas": [],
+    }
 
     while datapool.has_next():
-        item = datapool.next(task_id=str(task_id))
+        item = datapool.next(task_id=task_id)
         if item is None:
-            break  # outro processo pode ter consumido o item nesse meio-tempo
+            break
 
         resumo["total_processados"] += 1
+        lote = {col: str(item.get_value(col, "")) for col in COLUNAS_ESPERADAS}
 
         try:
-            lote = {coluna: item.get_value(coluna, "") for coluna in COLUNAS_ESPERADAS}
             divergencias = avaliar_lote(lote, base_ref)
-
             if not divergencias:
-                item.report_done(finish_message=f"Lote {lote['lote_id']} conforme.")
+                item.report_done(finish_message=f"Lote {lote.get('lote_id')} em conformidade.")
                 resumo["total_conformes"] += 1
-                logging.info(f"Item conforme: lote_id='{lote['lote_id']}'.")
             else:
-                regras = ",".join(d["regra"] for d in divergencias)
+                regras = ", ".join(d["regra"] for d in divergencias)
                 item.report_error(
                     error_type=ErrorType.BUSINESS,
-                    finish_message=f"Divergências: {regras}",
+                    finish_message=f"Divergências detectadas: {regras}",
                 )
                 resumo["total_com_divergencia"] += 1
-                _contabilizar_divergencias(resumo, divergencias)
-                logging.warning(f"Item com divergências ({regras}): lote_id='{lote['lote_id']}'.")
+
+                classif_ml = classificar_divergencia(lote.get("observacao", ""))
+                for div in divergencias:
+                    resumo["divergencias_detalhadas"].append({
+                        "lote_id": lote.get("lote_id"),
+                        "origem_decisao": classif_ml["origem_decisao"],
+                        "confianca_ml": classif_ml["confianca_ml"],
+                        "causa_provavel": classif_ml["causa_provavel"],
+                        **div,
+                    })
         except Exception as e:
-            # Erro de sistema (não de negócio): marca o item e segue para o
-            # próximo — uma falha isolada não pode abortar a fila.
-            logging.error(f"Erro processando item (tipo: {type(e).__name__}).")
-            try:
-                item.report_error(
-                    error_type=ErrorType.SYSTEM,
-                    finish_message=f"Erro de sistema: {type(e).__name__}",
-                )
-            except Exception as erro_report:
-                logging.error(
-                    f"Falha ao reportar erro do item (tipo: {type(erro_report).__name__})."
-                )
-            resumo["total_erros_sistema"] += 1
+            logging.error(f"Erro de sistema no lote {lote.get('lote_id')}: {e}")
+            item.report_error(
+                error_type=ErrorType.SYSTEM,
+                finish_message=f"Erro de sistema: {type(e).__name__}",
+            )
 
-    caminho_resumo = Path("/tmp") / f"resumo_performer_{task_id}.json"
-    caminho_resumo.parent.mkdir(exist_ok=True, parents=True)
-    with open(caminho_resumo, "w", encoding="utf-8") as arquivo:
-        json.dump(resumo, arquivo, indent=2, ensure_ascii=False)
+    # Finaliza a task do Performer com status de SUCESSO
+    sdk.finish_task(
+        task_id=task_id,
+        status=AutomationTaskFinishStatus.SUCCESS,
+        message=f"Processamento de lotes concluído: {resumo['total_conformes']}/{resumo['total_processados']} conformes, {resumo['total_com_divergencia']} divergências.",
+    )
 
-    try:
-        sdk.post_artifact(
-            task_id=task_id,
-            artifact_name=f"resumo_{task_id}.json",
-            filepath=caminho_resumo,
-        )
-        logging.info(f"Artefato postado no Maestro: task {task_id}.")
-    except Exception as e:
-        # Não é fatal: a task ainda precisa ser finalizada com o resultado.
-        logging.error(f"Falha ao postar artefato (tipo: {type(e).__name__}).")
+    return resumo
 
-    if resumo["total_erros_sistema"] > 0 or resumo["total_com_divergencia"] > 0:
-        status = AutomationTaskFinishStatus.PARTIALLY_COMPLETED
-    else:
-        status = AutomationTaskFinishStatus.SUCCESS
+
+def executar_performer() -> int:
+    logger = setup_logger("performer")
+    logger.info("=== Iniciando Bot B — Performer Validador de Lotes ===")
 
     try:
-        sdk.finish_task(
-            task_id=str(task_id),
-            status=status,
-            message=f"{resumo['total_conformes']}/{resumo['total_processados']} conformes",
-            total_items=resumo["total_processados"],
-            processed_items=resumo["total_conformes"],
-            failed_items=resumo["total_com_divergencia"] + resumo["total_erros_sistema"],
-        )
-    except Exception as e:
-        logging.error(f"Falha ao finalizar task (tipo: {type(e).__name__}).")
-
-    _logar_resumo(resumo)
-    return 0
-
-
-def main() -> int:
-    logger = setup_logger()
-
-    logger.info("Iniciando Performer — Auditor de Lotes v1.0")
-
-    if not os.path.isdir(config.PASTA_ENTRADA):
-        logger.error(f"Pasta de entrada não encontrada: {config.PASTA_ENTRADA}")
-        _emitir_alerta_maestro(
-            titulo="Pasta de entrada ausente",
-            mensagem=f"O Performer não encontrou a pasta de entrada '{config.PASTA_ENTRADA}'.",
-        )
-        return 1
-
-    try:
-        usuario, _senha = obter_credencial_erp()
+        usuario, _ = obter_credencial_erp()
+        logger.info(f"Sessão ERP autorizada para: {usuario}")
     except VaultError as e:
-        logger.error(f"Não foi possível obter a credencial do ERP: {e}")
-        return 1
-
-    logger.info(f"Acessando sistema com o usuário: {usuario}")
-
-    if not os.path.isfile(BASE_REFERENCIA):
-        logger.error(
-            f"Base de referência não encontrada em {BASE_REFERENCIA}. "
-            f"Execute 'python -m scripts.planilha_para_csv' antes."
-        )
+        logger.error(f"Falha de autenticação no Vault: {e}")
         return 1
 
     try:
-        base_ref = carregar_base_referencia(BASE_REFERENCIA)
+        base_ref = carregar_base_dados_referencia()
     except Exception as e:
-        logger.error(f"Falha ao carregar a base de referência (tipo: {type(e).__name__}).")
+        logger.error(f"Erro ao carregar base de referência (RN03): {e}")
         return 1
 
-    try:
-        if not config.MAESTRO_ENABLED:
-            return _executar_dry_run(base_ref)
-        return _executar_com_maestro(base_ref)
-    except PerformerError as e:
-        logger.error(f"Performer abortado: {e}")
-        return 1
+    sdk = None
+    if config.MAESTRO_ENABLED:
+        if BotMaestroSDK is None:
+            logger.error("SDK botcity-maestro-sdk não instalado.")
+            return 1
+        try:
+            sdk = BotMaestroSDK(
+                server=config.BOTCITY_SERVER,
+                login=config.BOTCITY_LOGIN,
+                key=config.BOTCITY_KEY,
+            )
+            sdk.login()
+            resumo = executar_auditoria_maestro(sdk, base_ref)
+        except Exception as e:
+            logger.error(f"Erro na execução com Maestro: {e}")
+            return 1
+    else:
+        resumo = executar_auditoria_local(base_ref)
+
+    logger.info(
+        f"Auditoria concluída: {resumo['total_processados']} processados, "
+        f"{resumo['total_conformes']} conformes, {resumo['total_com_divergencia']} divergências."
+    )
+
+    # Salva resumo intermediário para o Bot C
+    caminho_inter = Path(tempfile.gettempdir()) / "resumo_auditoria_lotes.json"
+    caminho_inter.write_text(json.dumps(resumo, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Bot B dispara Bot C (Reporter)
+    disparar_bot_c(sdk, resumo)
+
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(executar_performer())

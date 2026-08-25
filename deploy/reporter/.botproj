@@ -1,0 +1,5 @@
+{
+  "name": "italo-reporter-v1",
+  "projectType": "PYTHON",
+  "main": "bot.py"
+}

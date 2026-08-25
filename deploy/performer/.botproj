@@ -1,0 +1,5 @@
+{
+  "name": "italo-performer-v1",
+  "projectType": "PYTHON",
+  "main": "bot.py"
+}

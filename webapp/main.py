@@ -1,89 +1,178 @@
 """
-Interface web do Bot de Conferência de Lotes (Issue de UI web).
+Interface web do projeto (Aula 22 — Dashboard Excel e Relatórios).
 
-Módulo independente: expõe uma API (FastAPI) que recebe o relatório
-original, roda `gerar_relatorio()` (src/relatorio.py) e devolve o resumo
-em JSON + o .xlsx de divergências para download. Serve também a página
-única (HTML/CSS/JS) em `webapp/static/`.
+Recebe o upload de `inspecao_lotes_10dias.xlsx`, roda o mesmo pipeline
+do README (carregar_planilha_10dias -> classificar_lotes ->
+calcular_indicadores -> gerar_relatorio_aula22 + gerar_resumo_executivo),
+expõe o resultado por API e serve o frontend (upload + preview +
+download) em webapp/static/.
 
-Convênio 005/2025 (INOVA, IFAM, LG Electronics do Brasil).
+Os indicadores são calculados uma única vez, em criar_dashboard(), e o
+mesmo objeto alimenta o Excel e o resumo_executivo.md — evitando que as
+duas saídas divirjam entre si (ver src/operational_indicators.py).
+
+Os registros Ambíguos elegíveis (ver src/item_processor.py) são
+encaminhados ao MLClient uma única vez por upload; o mesmo
+`ml_client_global`, em nível de módulo, é reaproveitado entre
+requisições de propósito — uma instância por requisição faria o
+circuit breaker nunca acumular estado (Exercício 24-A, Commit 5).
 """
 
 from __future__ import annotations
 
-import io
+import os
 import tempfile
 import uuid
 from pathlib import Path
 
-import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.relatorio import gerar_relatorio
+from src.aula22_classificacao import classificar_lotes
+from src.aula22_preprocessador import carregar_planilha_10dias
+from src.aula22_relatorio import gerar_relatorio_aula22
+from src.item_processor import processar_registros_ambiguos
+from src.ml_client import MLClient
+from src.operational_indicators import calcular_indicadores
+from src.resumo_executivo import gerar_resumo_executivo
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-EXTENSOES_ACEITAS = (".xlsx", ".xls", ".csv")
 
-app = FastAPI(title="Bot de Conferência de Lotes")
+app = FastAPI(title="Conferência de Lotes — Dashboard Aula 22")
 
-_relatorios_gerados: dict[str, Path] = {}
+EXTENSOES_ACEITAS = (".xlsx", ".xls")
+
+# Porta 8001: a mapeada para api-ml no docker-compose.yml do Commit 3.
+ML_API_URL = os.environ.get("ML_API_URL", "http://localhost:8001")
+ml_client_global = MLClient(base_url=ML_API_URL)
+
+# id -> {"arquivo": Path do .xlsx gerado, "resumo": dict, "log": str,
+#        "resumo_executivo": Path do .md gerado, "decisoes_ml": list[dict]}
+_dashboards_gerados: dict[str, dict] = {}
 
 
-def _ler_planilha(nome_arquivo: str, conteudo: bytes) -> pd.DataFrame:
+def _classificar_upload(nome_arquivo: str, conteudo: bytes) -> list:
+    """Salva o upload num arquivo temporário e roda o pipeline de classificação.
+
+    carregar_planilha_10dias lê de um caminho em disco (via
+    pd.ExcelFile), não de bytes em memória — por isso o passo
+    intermediário de escrever num arquivo temporário.
+
+    No Windows, um arquivo aberto por um handle (o do
+    NamedTemporaryFile) não pode ser reaberto por outro processo/handle
+    (o do pandas) enquanto o primeiro não for fechado — daí o
+    PermissionError [Errno 13] quando isso é feito dentro do mesmo
+    bloco "with". Por isso aqui: criamos com delete=False, fechamos
+    explicitamente antes de chamar carregar_planilha_10dias, e
+    apagamos manualmente no final (bloco finally).
+    """
     nome = (nome_arquivo or "").lower()
-    buffer = io.BytesIO(conteudo)
-
     if not nome.endswith(EXTENSOES_ACEITAS):
         raise HTTPException(
             status_code=400,
-            detail="Formato não suportado. Envie um arquivo .xlsx ou .csv.",
+            detail="Formato não suportado. Envie um arquivo .xlsx ou .xls.",
         )
 
+    arquivo_temporario = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     try:
-        if nome.endswith(".csv"):
-            return pd.read_csv(buffer)
-        return pd.read_excel(buffer)
-    except Exception as erro:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Não foi possível ler o arquivo enviado: {erro}",
-        ) from erro
+        arquivo_temporario.write(conteudo)
+        arquivo_temporario.close()  # libera o handle antes do pandas reabrir o arquivo (necessário no Windows)
+
+        try:
+            registros_por_dia, base_referencia = carregar_planilha_10dias(arquivo_temporario.name)
+        except ValueError as erro:
+            raise HTTPException(status_code=400, detail=str(erro)) from erro
+        except Exception as erro:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível ler o arquivo enviado: {erro}",
+            ) from erro
+    finally:
+        try:
+            Path(arquivo_temporario.name).unlink(missing_ok=True)
+        except PermissionError:
+            # No Windows, pandas/openpyxl às vezes mantém o handle do
+            # arquivo aberto internamente (via ExcelFile não fechado)
+            # mesmo depois de já termos lido os dados. Isso não afeta o
+            # resultado — é só um arquivo temporário que o SO limpa
+            # sozinho mais tarde — então não deixamos isso quebrar a
+            # resposta ao usuário.
+            pass
+
+    return classificar_lotes(registros_por_dia, base_referencia)
 
 
-@app.post("/api/relatorios")
-async def criar_relatorio(arquivo: UploadFile = File(...)) -> dict:
+@app.post("/api/aula22/dashboard")
+async def criar_dashboard(arquivo: UploadFile = File(...)) -> dict:
     conteudo = await arquivo.read()
-    planilha = _ler_planilha(arquivo.filename or "", conteudo)
+    registros = _classificar_upload(arquivo.filename or "", conteudo)
 
-    if planilha.empty:
-        raise HTTPException(status_code=400, detail="A planilha enviada está vazia.")
+    if not registros:
+        raise HTTPException(status_code=400, detail="Nenhum registro encontrado na planilha enviada.")
 
-    relatorio_id = uuid.uuid4().hex
-    caminho_saida = Path(tempfile.gettempdir()) / f"relatorio_divergencias_{relatorio_id}.xlsx"
+    dashboard_id = uuid.uuid4().hex
+    caminho_saida = Path(tempfile.gettempdir()) / f"relatorio_conferencia_lotes_{dashboard_id}.xlsx"
+    caminho_resumo_executivo = caminho_saida.with_suffix(".md")
 
-    resultado = gerar_relatorio(planilha, str(caminho_saida))
-    _relatorios_gerados[relatorio_id] = caminho_saida
+    indicadores = calcular_indicadores(registros)
+    decisoes_ml = processar_registros_ambiguos(registros, ml_client_global)
+    resultado = gerar_relatorio_aula22(
+        registros, str(caminho_saida), indicadores=indicadores, decisoes_ml=decisoes_ml,
+    )
+
+    texto_resumo_executivo = gerar_resumo_executivo(indicadores)
+    caminho_resumo_executivo.write_text(texto_resumo_executivo, encoding="utf-8")
+
+    resumo = resultado["resumo"]
+    evolucao_por_dia = [{"dia": dia, **valores} for dia, valores in resumo["evolucao_por_dia"].items()]
+
+    _dashboards_gerados[dashboard_id] = {
+        "arquivo": caminho_saida,
+        "resumo": resumo,
+        "log": resultado["log"],
+        "resumo_executivo": caminho_resumo_executivo,
+        "decisoes_ml": decisoes_ml,
+    }
 
     return {
-        "id": relatorio_id,
-        "resumo": resultado["resumo"],
-        "divergencias": resultado["divergencias"],
+        "id": dashboard_id,
+        "total": resumo["total"],
+        "por_classificacao": resumo["por_classificacao"],
+        "percentual": resumo["percentual"],
+        "evolucao_por_dia": evolucao_por_dia,
     }
 
 
-@app.get("/api/relatorios/{relatorio_id}/download")
-def baixar_relatorio(relatorio_id: str) -> FileResponse:
-    caminho = _relatorios_gerados.get(relatorio_id)
-    if caminho is None or not caminho.exists():
+@app.get("/api/aula22/dashboard/{dashboard_id}/download")
+def baixar_dashboard(dashboard_id: str) -> FileResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None or not dados["arquivo"].exists():
         raise HTTPException(status_code=404, detail="Relatório não encontrado.")
 
     return FileResponse(
-        caminho,
+        dados["arquivo"],
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="relatorio_divergencias.xlsx",
+        filename="relatorio_conferencia_lotes.xlsx",
     )
+
+
+@app.get("/api/aula22/dashboard/{dashboard_id}/log")
+def obter_log(dashboard_id: str) -> PlainTextResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None:
+        raise HTTPException(status_code=404, detail="Relatório não encontrado.")
+
+    return PlainTextResponse(dados["log"])
+
+
+@app.get("/api/aula22/dashboard/{dashboard_id}/resumo-executivo")
+def obter_resumo_executivo(dashboard_id: str) -> PlainTextResponse:
+    dados = _dashboards_gerados.get(dashboard_id)
+    if dados is None:
+        raise HTTPException(status_code=404, detail="Relatório não encontrado.")
+
+    return PlainTextResponse(dados["resumo_executivo"].read_text(encoding="utf-8"))
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

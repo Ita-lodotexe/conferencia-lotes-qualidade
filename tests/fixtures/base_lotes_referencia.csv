@@ -1,8 +1,0 @@
-lote_id,status_cadastro,produto,data_cadastro
-L001,Ativo,Camiseta Preta M,2026-06-01
-L002,Ativo,Calça Jeans 42,2026-06-02
-L003,Ativo,Camiseta Branca G,2026-06-03
-L005,Ativo,Meia Esportiva,2026-06-04
-L006,Ativo,Camiseta Cinza P,2026-06-05
-L007,Inativo,Bermuda Preta,2026-06-06
-L999,Ativo,Item Extra,2026-06-07

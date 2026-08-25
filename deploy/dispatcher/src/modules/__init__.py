@@ -1,0 +1,1 @@
+"""Módulos do Bot A."""
