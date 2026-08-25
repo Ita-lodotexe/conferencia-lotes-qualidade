@@ -120,3 +120,36 @@ def test_predict_com_modelo_ausente_retorna_503_em_vez_de_500(cliente_com_modelo
 
     assert resposta.status_code == 503
     assert "não carregado" in resposta.json()["detail"]
+
+
+def test_predict_com_observacao_texto_retorna_causa_e_confianca(client):
+    """Verifica que o endpoint /predict aceita payload de observação em texto livre (S10-B)."""
+    # 1. Erro de digitação
+    resp1 = client.post("/predict", json={"observacao": "digitei errado o codigo"})
+    assert resp1.status_code == 200
+    dados1 = resp1.json()
+    assert dados1["causa"] == "erro_digitacao"
+    assert dados1["confianca"] >= 0.75
+    assert dados1["classe_predita"] == "erro_digitacao"
+
+    # 2. Falta de peça na doca
+    resp2 = client.post("/predict", json={"observacao": "faltou peça na doca 3"})
+    assert resp2.status_code == 200
+    dados2 = resp2.json()
+    assert dados2["causa"] == "falta_peca"
+    assert dados2["confianca"] >= 0.75
+
+    # 3. Lançamento duplicado
+    resp3 = client.post("/predict", json={"observacao": "lançamento duplicado por engano"})
+    assert resp3.status_code == 200
+    dados3 = resp3.json()
+    assert dados3["causa"] == "lancamento_duplicado"
+    assert dados3["confianca"] >= 0.75
+
+    # 4. Observação vazia
+    resp4 = client.post("/predict", json={"observacao": ""})
+    assert resp4.status_code == 200
+    dados4 = resp4.json()
+    assert dados4["causa"] == "nao_classificado"
+    assert dados4["confianca"] == 0.0
+

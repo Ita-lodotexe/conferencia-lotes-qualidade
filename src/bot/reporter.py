@@ -54,15 +54,17 @@ def gerar_planilha_relatorio(dados_resumo: dict, caminho_saida: str) -> str:
         {"Métrica": "Total de Lotes Processados", "Valor": dados_resumo.get("total_processados", 0)},
         {"Métrica": "Lotes Conformes (Regras RN01-RN07)", "Valor": dados_resumo.get("total_conformes", 0)},
         {"Métrica": "Lotes com Divergência (Regras RN01-RN07)", "Valor": dados_resumo.get("total_com_divergencia", 0)},
+        {"Métrica": "Lotes Pendentes de Revisão (Infra)", "Valor": dados_resumo.get("total_pendentes_revisao", 0)},
         {"Métrica": "Classificações Concluídas por ML", "Valor": itens_com_ml},
         {"Métrica": "Classificações em Fallback ML", "Valor": itens_em_fallback},
         {"Métrica": "Taxa de Degradação ML (%)", "Valor": f"{taxa_fallback:.1f}%"},
     ]
     df_resumo = pd.DataFrame(linhas_resumo)
 
-    # Colunas obrigatórias do Bloco 5: origem_decisao e confianca_ml
+    # Colunas obrigatórias do Bloco 5: origem_decisao e confianca_ml (+ status_auditoria)
     colunas_obrigatorias = [
         "lote_id",
+        "status_auditoria",
         "regra",
         "campo",
         "descricao",

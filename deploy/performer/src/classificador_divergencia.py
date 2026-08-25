@@ -1,10 +1,24 @@
-"""Classificador de divergências via Machine Learning (Bot B Performer - Estudo de Caso S10-B)."""
+"""Classificador de divergências via Machine Learning (Bot B Performer - Estudo de Caso S10-B).
+
+Implementação defensiva blindada com captura hierárquica de exceções para
+garantir que qualquer falha de contrato/API, rede, decode ou status HTTP
+retorne fallback sem interromper a execução do pipeline no BotCity Maestro.
+
+Motivos de fallback rastreáveis:
+- "ml_desabilitado"   : ML_ENABLED=false
+- "timeout"           : resposta do serviço ultrapassou 3.0s
+- "servico_offline"   : falha de conexão (ConnectionError)
+- "baixa_confianca"   : predição abaixo de ML_CONFIANCA_MINIMA
+- "falha_contrato_api": erro de contrato HTTP 4xx/5xx ou decode
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import Timeout as RequestsTimeout
 
 logger = logging.getLogger("classificador.ml")
 
@@ -49,7 +63,7 @@ def classificar_divergencia(observacao: str) -> dict:
 
         if confianca < confianca_minima:
             logger.warning(
-                f"ML Fallback: Baixa confiança detectada no modelo ({confianca:.2f} < {confianca_minima:.2f}). "
+                f"ML Fallback [baixa_confianca]: Baixa confiança detectada no modelo ({confianca:.2f} < {confianca_minima:.2f}). "
                 f"Predição '{causa}' descartada e direcionada para revisão."
             )
             return {
@@ -67,9 +81,27 @@ def classificar_divergencia(observacao: str) -> dict:
             "motivo_fallback": None,
         }
 
+    except RequestsTimeout as e:
+        logger.warning(f"ML Fallback [timeout]: endpoint excedeu 3.0s ({e}). Retornando fallback seguro.")
+        return {
+            "causa_provavel": "nao_classificado",
+            "origem_decisao": "fallback",
+            "confianca_ml": 0.0,
+            "motivo_fallback": "timeout",
+        }
+
+    except RequestsConnectionError as e:
+        logger.warning(f"ML Fallback [servico_offline]: não foi possível conectar ao endpoint ({type(e).__name__}: {e}).")
+        return {
+            "causa_provavel": "nao_classificado",
+            "origem_decisao": "fallback",
+            "confianca_ml": 0.0,
+            "motivo_fallback": "servico_offline",
+        }
+
     except Exception as e:
         logger.warning(
-            f"ML Fallback: Falha de contrato/API ou erro de comunicação com modelo ({type(e).__name__}: {e}). "
+            f"ML Fallback [falha_contrato_api]: Falha de contrato/API ({type(e).__name__}: {e}). "
             "Forçando retorno seguro de fallback."
         )
         return {

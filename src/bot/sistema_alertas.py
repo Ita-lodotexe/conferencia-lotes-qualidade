@@ -86,8 +86,6 @@ def _enviar_whatsapp_twilio(titulo: str, mensagem: str, severidade: str) -> bool
     ):
         logger.info("[DRY-RUN ALERTA] Fallback WhatsApp Twilio simulado (credenciais Twilio não configuradas/exemplo).")
         return True
-        logger.info("[DRY-RUN ALERTA] Fallback WhatsApp Twilio simulado (credenciais Twilio locais/vazias).")
-        return True
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
     data = {

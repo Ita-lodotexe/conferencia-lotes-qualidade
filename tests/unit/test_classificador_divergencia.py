@@ -22,7 +22,8 @@ def test_ml_disabled_retorna_fallback_imediato(monkeypatch):
     mock_post.assert_not_called()
 
 
-def test_ml_timeout_retorna_fallback(monkeypatch):
+def test_ml_timeout_retorna_fallback_com_motivo_timeout(monkeypatch):
+    """Timeout deve gerar motivo_fallback distinto: 'timeout' (não 'falha_contrato_api')."""
     monkeypatch.setenv("ML_ENABLED", "true")
     monkeypatch.setattr(requests, "post", MagicMock(side_effect=Timeout("Tempo esgotado")))
 
@@ -31,25 +32,30 @@ def test_ml_timeout_retorna_fallback(monkeypatch):
     assert resultado["origem_decisao"] == "fallback"
     assert resultado["causa_provavel"] == "nao_classificado"
     assert resultado["confianca_ml"] == 0.0
-    assert resultado["motivo_fallback"] == "falha_contrato_api"
+    assert resultado["motivo_fallback"] == "timeout"
 
 
-def test_ml_erro_conexao_retorna_fallback(monkeypatch):
+def test_ml_erro_conexao_retorna_fallback_com_motivo_servico_offline(monkeypatch):
+    """ConnectionError deve gerar motivo_fallback distinto: 'servico_offline'."""
     monkeypatch.setenv("ML_ENABLED", "true")
-    monkeypatch.setattr(requests, "post", MagicMock(side_effect=ConnectionError("Serviço offline")))
+    monkeypatch.setattr(
+        requests, "post", MagicMock(side_effect=ConnectionError("Serviço offline"))
+    )
 
     resultado = classificar_divergencia("Defeito na tela")
 
     assert resultado["origem_decisao"] == "fallback"
     assert resultado["causa_provavel"] == "nao_classificado"
     assert resultado["confianca_ml"] == 0.0
-    assert resultado["motivo_fallback"] == "falha_contrato_api"
+    assert resultado["motivo_fallback"] == "servico_offline"
 
 
 def test_ml_erro_contrato_422_ou_500_retorna_fallback(monkeypatch):
     monkeypatch.setenv("ML_ENABLED", "true")
     mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = HTTPError("422 Unprocessable Entity - One-hot encoding expected")
+    mock_resp.raise_for_status.side_effect = HTTPError(
+        "422 Unprocessable Entity - One-hot encoding expected"
+    )
     monkeypatch.setattr(requests, "post", MagicMock(return_value=mock_resp))
 
     resultado = classificar_divergencia("Defeito na tela")
@@ -62,7 +68,9 @@ def test_ml_erro_contrato_422_ou_500_retorna_fallback(monkeypatch):
 
 def test_ml_excecao_inesperada_retorna_fallback(monkeypatch):
     monkeypatch.setenv("ML_ENABLED", "true")
-    monkeypatch.setattr(requests, "post", MagicMock(side_effect=RuntimeError("Erro desconhecido")))
+    monkeypatch.setattr(
+        requests, "post", MagicMock(side_effect=RuntimeError("Erro desconhecido"))
+    )
 
     resultado = classificar_divergencia("Defeito na tela")
 
@@ -86,6 +94,7 @@ def test_ml_confianca_abaixo_do_limiar_cai_no_fallback(monkeypatch):
     assert resultado["origem_decisao"] == "fallback"
     assert resultado["causa_provavel"] == "nao_classificado"
     assert resultado["confianca_ml"] == 0.65
+    assert resultado["motivo_fallback"] == "baixa_confianca"
 
 
 def test_ml_sucesso_com_alta_confianca(monkeypatch):
@@ -102,3 +111,21 @@ def test_ml_sucesso_com_alta_confianca(monkeypatch):
     assert resultado["origem_decisao"] == "ml"
     assert resultado["causa_provavel"] == "defeito_fabrica"
     assert resultado["confianca_ml"] == 0.92
+    assert resultado["motivo_fallback"] is None
+
+
+def test_motivos_fallback_sao_distintos_entre_timeout_e_offline(monkeypatch):
+    """Garantia de que timeout e servico_offline têm motivos diferentes — item 3.4 do formulário."""
+    monkeypatch.setenv("ML_ENABLED", "true")
+
+    # Timeout
+    monkeypatch.setattr(requests, "post", MagicMock(side_effect=Timeout("lento")))
+    r_timeout = classificar_divergencia("obs")
+
+    # ConnectionError
+    monkeypatch.setattr(requests, "post", MagicMock(side_effect=ConnectionError("offline")))
+    r_offline = classificar_divergencia("obs")
+
+    assert r_timeout["motivo_fallback"] != r_offline["motivo_fallback"]
+    assert r_timeout["motivo_fallback"] == "timeout"
+    assert r_offline["motivo_fallback"] == "servico_offline"

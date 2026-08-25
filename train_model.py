@@ -66,6 +66,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from datetime import datetime 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
@@ -119,6 +120,7 @@ def gerar_dataset(n_amostras: int = N_AMOSTRAS) -> pd.DataFrame:
             {"status_raw": status_raw, "turno": turno, "tem_obs": tem_obs, "classe": classe}
         )
 
+    pd.DataFrame(linhas).to_csv(f'data/processed/dataset_sintetico_{datetime.now().strftime('%d-%m-%y--%H-%M-%S')}.csv', index=False)
     return pd.DataFrame(linhas)
 
 
